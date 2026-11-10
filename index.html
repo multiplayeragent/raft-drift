@@ -1,0 +1,1126 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Raft Drift</title>
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; overscroll-behavior: none; background: #8fd8ff; }
+  body { font: 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; color: #fff; user-select: none; -webkit-user-select: none; }
+  canvas { display: block; touch-action: none; cursor: crosshair; }
+  .hud { position: fixed; pointer-events: none; text-shadow: 0 2px 4px #0009; }
+  #stash { top: max(12px, env(safe-area-inset-top)); left: max(14px, env(safe-area-inset-left)); font-weight: 800; font-size: 20px; line-height: 1.35; }
+  #stash small { display: block; font-size: 13px; font-weight: 600; opacity: .9; }
+  #team { top: max(12px, env(safe-area-inset-top)); right: max(14px, env(safe-area-inset-right)); font-size: 13px; text-align: right; line-height: 1.5; }
+  #team .mine { color: #ffe066; font-weight: 700; } #team i { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-left: 6px; }
+  #net { bottom: max(10px, env(safe-area-inset-bottom)); left: max(14px, env(safe-area-inset-left)); font-size: 12px; opacity: .85; }
+  #saved { bottom: calc(max(10px, env(safe-area-inset-bottom)) + 18px); left: max(14px, env(safe-area-inset-left)); font-size: 12px; opacity: 0; transition: opacity .5s; }
+  #saved.on { opacity: .9; }
+  #alert { top: 18%; left: 0; right: 0; text-align: center; font-size: 22px; font-weight: 900; color: #ffe066; opacity: 0; transition: opacity .3s; }
+  #alert.on { opacity: 1; }
+  #toast { top: calc(18% + 36px); left: 16px; right: 16px; text-align: center; font-size: 17px; font-weight: 800; opacity: 0; transition: opacity .4s; }
+  #toast.on { opacity: 1; }
+  #hint { bottom: calc(max(12px, env(safe-area-inset-bottom)) + 84px); left: 50%; transform: translateX(-50%); width: min(440px, calc(100vw - 32px)); box-sizing: border-box; text-align: center; font-size: 15px; font-weight: 700; padding: 10px 14px; border-radius: 14px; background: #0b3a5aaa; transition: opacity .6s; }
+  .pop { position: fixed; left: 0; top: 0; pointer-events: none; font-weight: 900; font-size: 17px; color: #ffe066; text-shadow: 0 2px 3px #000a; white-space: nowrap; will-change: transform; }
+  #build { position: fixed; left: 50%; transform: translateX(-50%); bottom: max(14px, env(safe-area-inset-bottom)); min-width: 150px; min-height: 56px; padding: 6px 18px; border: 2px solid #ffffff66; border-radius: 16px; background: #0b3a5acc; color: #fff; font: 900 16px/1.15 system-ui, sans-serif; cursor: pointer; touch-action: none; }
+  #build small { display: block; font-size: 12px; font-weight: 700; color: #ffe066; }
+  #build.on { background: #2fbf71; border-color: #fff; }
+  #build.poor { opacity: .6; }
+  .stick { position: fixed; width: 120px; height: 120px; margin: -60px 0 0 -60px; border-radius: 50%; border: 2px solid #ffffff66; background: #ffffff18; pointer-events: none; }
+  .stick i { position: absolute; left: 34px; top: 34px; width: 52px; height: 52px; border-radius: 50%; background: #ffffff80; }
+  .stick[hidden], #sunk[hidden] { display: none; }
+  #sunk { position: fixed; inset: 0; display: grid; place-items: center; background: #04203aa8; }
+  .card { box-sizing: border-box; width: min(380px, calc(100vw - 32px)); max-height: 86vh; overflow: auto; padding: 20px; border-radius: 16px; background: #0d3550; border: 1px solid #ffffff2a; text-align: center; }
+  .card h2 { margin: 0; font-size: 26px; color: #ffe066; } .card h3 { margin: 14px 0 4px; font-size: 13px; color: #9fe6ff; text-align: left; }
+  .card ol { margin: 0; padding-left: 24px; font-size: 14px; text-align: left; }
+  .card li span { float: right; font-variant-numeric: tabular-nums; }
+  .card p { margin: 8px 0 0; font-size: 14px; opacity: .85; }
+  button.go { width: 100%; min-height: 48px; margin-top: 16px; border: 0; border-radius: 12px; background: #ffe066; color: #3a2a00; font: 800 17px system-ui, sans-serif; cursor: pointer; }
+  @media (max-width: 640px) { #team { display: none; } #stash { font-size: 18px; } }
+  .touch #net { left: 50%; transform: translateX(-50%); white-space: nowrap; bottom: calc(max(10px, env(safe-area-inset-bottom)) + 74px); }
+  .touch #build { left: auto; right: max(16px, env(safe-area-inset-right)); transform: none; }
+  .touch #hint { bottom: auto; top: calc(max(12px, env(safe-area-inset-top)) + 70px); }
+  .attract .hud, .attract #build, .attract #sunk { display: none !important; }
+</style>
+<script src="https://cdn.multiplayeragent.com/sdk/mp.global.js"></script>
+<script type="importmap">{ "imports": { "three": "./libs/three.module.min.js" } }</script>
+</head>
+<body>
+<div class="hud" id="stash"></div>
+<div class="hud" id="team"></div>
+<div class="hud" id="net">Connecting…</div>
+<div class="hud" id="saved">✓ Raft saved</div>
+<div class="hud" id="alert"></div>
+<div class="hud" id="toast"></div>
+<div class="hud" id="hint"></div>
+<button id="build">BUILD<small></small></button>
+<div class="stick" id="stick" hidden><i></i></div>
+<div id="sunk" hidden><div class="card">
+  <h2>The shark got you!</h2><p id="sunkSub"></p>
+  <h3>Biggest rafts</h3><ol id="board"><li>Loading…</li></ol>
+  <button class="go" id="aboard">Back aboard</button><p id="sunkNext"></p>
+</div></div>
+<script type="module">
+/* ═══ RAFT DRIFT · a Multiplayer Agent starter ════════════════════════════════════════════
+ * Hook what floats past, build the raft bigger, keep the shark off it. Co-op, 1–6 players.
+ *
+ * WHERE THINGS ARE (search for the "── " headers):
+ *   CONFIG ........ the raft, debris, the hook, the shark, bots
+ *   CONNECTION .... MP_CONNECT, joining, the offline room, who is host
+ *   WORLD MEMORY .. how the raft survives the room emptying (same code as voxel-builders)
+ *   RAFT .......... the tile grid: how tiles are packed into one shared field, what can be built
+ *   SEA ........... waves, the raft, the mast, floating debris, the shark (all drawn in code)
+ *   CREW .......... the crew model, name tags, hooks and their ropes
+ *   EFFECTS ....... particles, floating "+2 wood" pops, sounds
+ *   SEA (HOST) .... debris drifting and reeling in, the shark's brain, building, bots. Host only.
+ *   ME ............ walking, swimming, throwing the hook, building, getting chomped
+ *   HUD ........... the crew's stash, build button, the card when the shark gets you, leaderboard
+ *   INPUT ......... keyboard + mouse, a thumb stick and tap-to-throw on touch
+ *
+ * HOW THE MULTIPLAYER WORKS (a relay room: no server code, the HOST's browser runs the sea):
+ *   - Each player writes its OWN entity: `p` (one JSON field: x, z, facing, swimming, where
+ *     its hook is) about 10 times a second, `hb` (heartbeat) once a second, `n`/`c` (name, color).
+ *   - The HOST is the lowest sessionId among live players (heartbeat seen in the last 3s),
+ *     worked out every frame. Only the host writes the shared fields:
+ *       `raft`   every tile, one character per spot (see RAFT)
+ *       `crew`   {w, r, hooked}: the crew's wood and rope, and who hooked what
+ *       `rev`    how many tiles PEOPLE have built (world memory compares it)
+ *       `debris` everything floating past, and who is reeling what in, 10 times a second
+ *       `shark`  {x, z, h, st, hits, tile, until}: where it is and what it is doing, 10 times a second
+ *       `bots`   the AI crew, 10 times a second
+ *     A new host adopts all of it from state and carries on: same raft, same shark.
+ *   - Your hook flies on your own screen. If it lands on debris you send "hook" {i}; the host
+ *     marks it as yours and reels it to you, and its wood and rope go to the crew. If it lands on
+ *     the shark you send "smack" {}; enough smacks and the shark swims off. "build" {x, y} asks
+ *     for a tile; the host checks the spot and the crew's stash. Its own intents apply directly.
+ *   - The shark chomps swimmers by event: the host sends "chomp" {to} and only that player
+ *     shows the card and climbs back aboard.
+ *   - The raft and the crew's stash outlive the room through WORLD MEMORY (see that section).
+ *   - ?attract plays offline with bots only (the preview video is recorded from it).
+ *   - Leaderboard "raft-size": the biggest raft (in tiles) each player has sailed on.
+ */
+import * as THREE from "three";
+
+// ── CONFIG ──────────────────────────────────────────────────────────────────────────
+const CONFIG = {
+  grid: 21,              // the raft can grow over grid × grid spots ...
+  tile: 2,               // ... each this many units across
+  tileHp: 3,             // shark bites a tile takes before it breaks (the first 3×3 never breaks)
+  cost: { w: 4, r: 1 },  // one new tile, from the crew's stash
+  startStash: { w: 8, r: 2 },
+  drift: 1.6,            // how fast the sea carries debris past, units/s
+  maxDebris: 14,         // most pieces floating at once
+  debrisEvery: 0.9,      // seconds between new pieces
+  debrisSpread: 24,      // pieces float past this far either side of the raft
+  hookRange: 14,         // how far you can throw the hook
+  hookSpeed: 24,         // how fast it flies, units/s
+  hookGrab: 1.7,         // it catches a piece this close to where it lands
+  reelSpeed: 9,          // a hooked piece comes in this fast
+  walk: 5,               // walking speed on the raft
+  swim: 2.4,             // swimming speed
+  sharkSpeed: 5.5,       // units/s
+  sharkHits: 3,          // smacks before the shark swims off
+  sharkBiteMs: 1300,     // ms between bites on a tile
+  sharkRestMs: [5000, 10000], // it circles this long between attacks
+  sharkFleeMs: 9000,     // after enough smacks it stays away this long
+  sharkGraceMs: 1500,    // someone in the water this long gets hunted (time to climb back after a slip)
+  seats: 4,              // bots fill the crew up to this many
+  botThrowMs: [2500, 4500], // a bot waits this long between throws (they leave plenty for you)
+  botReserve: 4,         // wood the bots leave for each person in the crew
+  saveNs: "raft-drift",  // player-save namespace for world memory
+  saveEvery: 10000,      // ms between world-memory saves
+  board: "raft-size",    // leaderboard name
+};
+// What floats past: how often (weight) and what it gives the crew (w = wood, r = rope).
+const DEBRIS = {
+  plank: { weight: 6, w: 2, r: 0 },
+  rope: { weight: 3, w: 0, r: 1 },
+  barrel: { weight: 2, w: 3, r: 2 },
+  crate: { weight: 1, w: 5, r: 3 },
+};
+const COLORS = ["#ff7b54", "#4ab3ff", "#ffd23f", "#7ee081", "#c792ff", "#ff6fae", "#39d5c9", "#f2f2f2"];
+const BOT_NAMES = ["Marlo", "Wren", "Skip", "Nori", "Tula", "Bix"];
+
+// ── CONNECTION ──────────────────────────────────────────────────────────────────────
+// The builder fills these in for this game. Downloaded from GitHub? Put your own pk_ key here.
+const MP_CONNECT = {
+  key: 'pk_REPLACE_ME',
+  room: 'raft-drift',
+  endpoint: 'wss://live.multiplayeragent.com',
+  apiUrl: 'https://api.multiplayeragent.com',
+};
+const ATTRACT = new URLSearchParams(location.search).has("attract");
+
+/** Same shape as the SDK client, kept in this tab: offline play and ?attract. */
+function localRoom() {
+  const id = "local", state = { entities: { players: { [id]: {} } }, shared: {} }, subs = [];
+  let queued = false;
+  const emit = () => { if (!queued) { queued = true; queueMicrotask(() => { queued = false; subs.forEach((f) => f(state)); }); } };
+  const put = (o, k, v) => { if (typeof k === "object") Object.assign(o, k); else o[k] = v; emit(); };
+  return {
+    sessionId: id, state, offline: true,
+    me: { set: (k, v) => put(state.entities.players[id], k, v) },
+    setShared: (k, v) => put(state.shared, k, v),
+    onState: (f) => { subs.push(f); f(state); }, onJoin() {}, onLeave() {}, on() {}, send() {},
+    onDisconnect() {}, onReconnect() {}, leave: async () => {},
+  };
+}
+async function connect() {
+  if (ATTRACT || typeof MP === "undefined") return localRoom();
+  try {
+    const mp = await Promise.race([MP.join({ ...MP_CONNECT }), new Promise((_, no) => setTimeout(() => no(new Error("timed out")), 10000))]);
+    window.mp = mp; // the builder calls window.mp.leave() when the page closes
+    return mp;
+  } catch (e) {
+    console.warn("Playing offline:", e && e.message);
+    return localRoom();
+  }
+}
+const parse = (v, fb) => { if (typeof v !== "string") return fb; try { return JSON.parse(v); } catch { return fb; } };
+const parsed = new Map();
+/** A value from state, decoded once per change. Read-only: never mutate what this returns. */
+function parseOnce(key, raw, decode) {
+  const c = parsed.get(key);
+  if (c && c.raw === raw) return c.v;
+  const v = decode(raw); parsed.set(key, { raw, v }); return v;
+}
+let net = null, S = { entities: { players: {} }, shared: {} };
+let player = null; // MP.auth client: world-memory saves + the leaderboard (null offline)
+const seenHb = new Map();
+/** Players whose heartbeat moved in the last 3s (plus us), sorted by sessionId. */
+function livePlayers() {
+  const now = performance.now(), out = [];
+  for (const [id, p] of Object.entries(S.entities.players || {})) {
+    const s = seenHb.get(id);
+    if (!s || s.hb !== p.hb) seenHb.set(id, { hb: p.hb, at: now });
+    if (id === net.sessionId || now - seenHb.get(id).at < 3000) out.push(id);
+  }
+  return out.sort();
+}
+const isHost = () => livePlayers()[0] === net.sessionId;
+
+// ── WORLD MEMORY ────────────────────────────────────────────────────────────────────
+// A relay room forgets everything when its last player leaves, so the PLAYERS remember the raft:
+//   1. Every CONFIG.saveEvery ms and when the page closes, each player saves a copy of the raft
+//      and the crew's stash with its `rev` (how many tiles PEOPLE built; bots don't count, so a
+//      fresh raft grown by bots never beats a saved one) to its player save (player.data,
+//      namespace CONFIG.saveNs) and to this browser (localStorage). A copy with a higher rev
+//      than the live raft is never overwritten: it is kept and offered.
+//   2. The first player into an empty room becomes host and loads its copy into shared.
+//   3. A player who joins holding a copy with a HIGHER rev than the live raft offers it: it
+//      writes the copy into its own entity (`wmh` header, `wm0`, `wm1`… chunks under 2048
+//      characters) and the host adopts it. The copy with more building in it wins.
+// The game supplies worldSnapshot(), liveRev() (-1 = no raft yet) and loadWorld(world, rev).
+const memory = { saved: null, ready: false, cloud: null, lastJson: "", lastSave: 0, offerRev: 0, offerN: 0 };
+const memoryKey = () => "mpa-world:" + MP_CONNECT.room + (net.offline ? ":offline" : "");
+
+/** Read my copy: this browser's and my cloud save, whichever has the higher rev. */
+async function loadMemory() {
+  let best = null;
+  try { best = JSON.parse(localStorage.getItem(memoryKey()) || "null"); } catch {}
+  if (player) {
+    try {
+      const doc = (await player.data.get(CONFIG.saveNs)).data;
+      if (doc && doc.room === MP_CONNECT.room && doc.world && (!best || doc.rev > best.rev)) best = doc;
+      memory.cloud = true;
+    } catch (e) { memory.cloud = false; console.warn("World memory: no cloud save, this browser only:", e && e.message); }
+  }
+  memory.saved = best && best.room === MP_CONNECT.room && best.world && typeof best.rev === "number" ? best : null;
+  memory.lastJson = memory.saved ? JSON.stringify(memory.saved.world) : "";
+  memory.ready = true;
+}
+
+/** Save my copy of the live raft, unless it is unchanged or older than the copy I hold. */
+function rememberWorld() {
+  if (ATTRACT || !memory.ready) return;
+  const rev = liveRev();
+  if (rev < 0 || (memory.saved && rev < memory.saved.rev)) return; // mine is newer: keep it, keep offering it
+  const doc = { room: MP_CONNECT.room, rev, at: Date.now(), world: worldSnapshot() };
+  const json = JSON.stringify(doc.world);
+  if (json === memory.lastJson) return;
+  memory.lastJson = json; memory.saved = doc;
+  try { localStorage.setItem(memoryKey(), JSON.stringify(doc)); } catch {}
+  if (player && memory.cloud) {
+    player.data.set(doc, { namespace: CONFIG.saveNs })
+      .catch((e) => e && e.current ? player.data.set(doc, { namespace: CONFIG.saveNs, version: e.current.version }) : Promise.reject(e))
+      .catch((e) => { if (e && (e.status === 401 || e.status === 403)) memory.cloud = false; });
+  }
+  const tag = document.getElementById("saved");
+  if (tag) { tag.classList.add("on"); setTimeout(() => tag.classList.remove("on"), 1600); }
+}
+
+/** Once a second: offer my copy if it beats the live raft (the host simply loads it). */
+function offerMemory() {
+  if (ATTRACT || !memory.ready) return;
+  const mine = memory.saved, live = liveRev(), better = mine && mine.rev > live;
+  if (isHost()) {
+    if (memory.offerRev) clearOffer();
+    if (better && live >= 0 && loadWorld(mine.world, mine.rev)) memoryAdopted("");
+    return;
+  }
+  if (better && memory.offerRev !== mine.rev) {
+    const json = JSON.stringify(mine.world), fields = {}, n = Math.ceil(json.length / 1900);
+    if (n > 40) return; // too big for my entity: keep it for when I am host
+    for (let i = 0; i < n; i++) fields["wm" + i] = "~" + json.slice(i * 1900, (i + 1) * 1900); // "~" keeps it a string
+    net.me.set(fields);
+    net.me.set("wmh", JSON.stringify({ room: MP_CONNECT.room, rev: mine.rev, n })); // header last: chunks land first
+    memory.offerRev = mine.rev; memory.offerN = n;
+  } else if (!better && memory.offerRev) clearOffer();
+}
+function clearOffer() {
+  const fields = { wmh: "" };
+  for (let i = 0; i < memory.offerN; i++) fields["wm" + i] = "";
+  net.me.set(fields); memory.offerRev = 0; memory.offerN = 0;
+}
+
+/** Host, once a second: adopt the best complete offer that beats the live raft. */
+function adoptOffers() {
+  let best = null;
+  for (const id of livePlayers()) {
+    const p = S.entities.players[id], h = id !== net.sessionId && parse(p && p.wmh, null);
+    if (!h || h.room !== MP_CONNECT.room || !(h.n <= 40) || !(h.rev > liveRev()) || (best && h.rev <= best.rev)) continue;
+    let json = "";
+    for (let i = 0; i < h.n && json !== null; i++) { const c = p["wm" + i]; json = typeof c === "string" && c[0] === "~" ? json + c.slice(1) : null; }
+    const world = parse(json, null);
+    if (world) best = { rev: h.rev, world, name: p.n || "A player" };
+  }
+  if (best && loadWorld(best.world, best.rev)) memoryAdopted(best.name);
+}
+function memoryAdopted(name) {
+  const text = name ? `${name} brought back the raft they saved` : "Welcome back: your saved raft is here";
+  toast(text); net.send("memory", { text: name ? text : "The host brought back the raft they saved" });
+}
+function memoryTick() {
+  offerMemory();
+  if (isHost() && !ATTRACT) adoptOffers();
+  if (performance.now() - memory.lastSave > CONFIG.saveEvery) { memory.lastSave = performance.now(); rememberWorld(); }
+}
+addEventListener("pagehide", () => rememberWorld());
+document.addEventListener("visibilitychange", () => { if (document.hidden) rememberWorld(); });
+
+// ── RAFT ────────────────────────────────────────────────────────────────────────────
+// `raft` holds one character per spot, row by row, after a "~" (so it never looks like a number):
+//   "." open water · "#" one of the first nine tiles (never breaks) · "a".."c" a tile with 1..3 bites left.
+const N = CONFIG.grid, MID = (N - 1) / 2, TAU = Math.PI * 2;
+const tileX = (t) => (t - MID) * CONFIG.tile;                // column/row -> world x/z
+const toTile = (v) => Math.round(v / CONFIG.tile + MID);
+const spotAt = (x, z) => { const tx = toTile(x), ty = toTile(z); return tx >= 0 && ty >= 0 && tx < N && ty < N ? ty * N + tx : -1; };
+const spotX = (i) => tileX(i % N), spotZ = (i) => tileX(Math.floor(i / N));
+const isTile = (ch) => ch === "#" || (ch >= "a" && ch <= "z");
+const tileHp = (ch) => ch === "#" ? Infinity : ch.charCodeAt(0) - 96;
+const NEIGHBORS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+function neighbors(i) { const x = i % N, y = Math.floor(i / N), out = []; for (const [dx, dy] of NEIGHBORS) { const nx = x + dx, ny = y + dy; if (nx >= 0 && ny >= 0 && nx < N && ny < N) out.push(ny * N + nx); } return out; }
+function foundingRaft() { const g = Array(N * N).fill("."); for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) g[(MID + dy) * N + MID + dx] = "#"; return g; }
+const decodeRaft = (raw) => { const g = foundingRaft(); if (typeof raw === "string" && raw[0] === "~" && raw.length === N * N + 1) for (let i = 0; i < N * N; i++) if (g[i] !== "#") g[i] = isTile(raw[i + 1]) && raw[i + 1] !== "#" ? raw[i + 1] : "."; return g; };
+const encodeRaft = (g) => "~" + g.join("");
+/** Can a new tile go on spot i? Open water next to the raft, not on the outer ring. The same check runs everywhere. */
+function canBuild(g, i) {
+  if (i < 0 || g[i] !== ".") return false;
+  const x = i % N, y = Math.floor(i / N);
+  return x > 0 && y > 0 && x < N - 1 && y < N - 1 && neighbors(i).some((n) => isTile(g[n]));
+}
+/** Tiles the shark can bite: breakable, with open water beside them. */
+const edgeTiles = (g) => g.map((ch, i) => i).filter((i) => isTile(g[i]) && g[i] !== "#" && neighbors(i).some((n) => g[n] === "."));
+const tileCount = (g) => g.reduce((n, ch) => n + (isTile(ch) ? 1 : 0), 0);
+const onRaft = (g, x, z) => { const i = spotAt(x, z); return i >= 0 && isTile(g[i]); };
+function raftRadius(g) { let r = 3; g.forEach((ch, i) => { if (isTile(ch)) r = Math.max(r, Math.hypot(spotX(i), spotZ(i)) + 1.5); }); return r; }
+/** The raft tile nearest (x, z). */
+function nearestTile(g, x, z) { let best = -1, bd = Infinity; g.forEach((ch, i) => { if (isTile(ch)) { const d = Math.hypot(spotX(i) - x, spotZ(i) - z); if (d < bd) { bd = d; best = i; } } }); return best; }
+function mulberry32(a) { return () => { a |= 0; a = (a + 0x6d2b79f5) | 0; let t = Math.imul(a ^ (a >>> 15), 1 | a); t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t; return ((t ^ (t >>> 14)) >>> 0) / 4294967296; }; }
+
+// ── SEA ─────────────────────────────────────────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(2, devicePixelRatio || 1));
+renderer.shadowMap.enabled = true;
+document.body.prepend(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color("#8fd8ff");
+scene.fog = new THREE.Fog("#a8e2ff", 40, 120);
+const camera = new THREE.PerspectiveCamera(50, 1, 0.5, 300);
+function fit() {
+  renderer.setSize(innerWidth, innerHeight); camera.aspect = innerWidth / innerHeight;
+  camera.fov = innerHeight > innerWidth ? 62 : 50; camera.updateProjectionMatrix();
+}
+addEventListener("resize", fit); addEventListener("orientationchange", fit); fit();
+scene.add(new THREE.HemisphereLight("#e6f6ff", "#2d6e9c", 1.25));
+const sun = new THREE.DirectionalLight("#fff3dc", 1.7);
+sun.castShadow = true; sun.shadow.mapSize.set(1024, 1024); sun.shadow.bias = -0.0008;
+Object.assign(sun.shadow.camera, { left: -26, right: 26, top: 26, bottom: -26, near: 1, far: 100 });
+scene.add(sun, sun.target);
+function canvasTex(w, h, paint, repeat) {
+  const c = document.createElement("canvas"); c.width = w; c.height = h; paint(c.getContext("2d"), w, h);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; t.anisotropy = 4;
+  if (repeat) { t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(repeat, repeat); }
+  return t;
+}
+const mesh = (geo, mat, x = 0, y = 0, z = 0) => { const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); return m; };
+const mat = (color, o = {}) => new THREE.MeshStandardMaterial({ color, roughness: 0.8, ...o });
+// Waves: a low-poly sheet whose points bob every frame.
+const seaGeo = new THREE.PlaneGeometry(170, 170, 56, 56).rotateX(-Math.PI / 2);
+const seaBase = Float32Array.from(seaGeo.attributes.position.array);
+const sea = mesh(seaGeo, new THREE.MeshStandardMaterial({ color: "#2a9ad8", roughness: 0.3, metalness: 0.05, flatShading: true }));
+sea.receiveShadow = true; scene.add(sea);
+const waveY = (x, z, t) => Math.sin(x * 0.35 + t * 1.3) * 0.18 + Math.sin(z * 0.28 - t * 1.1) * 0.16 + Math.sin((x + z) * 0.6 + t * 2) * 0.06;
+// Foam flecks drift with the current, so you can see the raft is moving.
+const FOAM = 90, foam = new THREE.InstancedMesh(new THREE.BoxGeometry(0.5, 0.04, 0.18), new THREE.MeshBasicMaterial({ color: "#e8f8ff", transparent: true, opacity: 0.75 }), FOAM);
+foam.frustumCulled = false; scene.add(foam);
+const foamBits = Array.from({ length: FOAM }, (_, i) => ({ x: (mulberry32(i + 1)() - 0.5) * 90, z: (mulberry32(i + 99)() - 0.5) * 70, s: 0.6 + mulberry32(i + 7)() }));
+function stepSea(t, dt) {
+  const p = seaGeo.attributes.position;
+  for (let i = 0; i < p.count; i++) p.array[i * 3 + 1] = waveY(seaBase[i * 3], seaBase[i * 3 + 2], t) - 0.25;
+  p.needsUpdate = true;
+  foamBits.forEach((f, i) => {
+    f.x += CONFIG.drift * dt; if (f.x > 45) f.x -= 90;
+    M.compose(P3.set(f.x, waveY(f.x, f.z, t) - 0.12, f.z), Q.identity(), S3.set(f.s, 1, f.s)); foam.setMatrixAt(i, M);
+  });
+  foam.instanceMatrix.needsUpdate = true;
+}
+// The raft: plank tiles (instanced), a mast with a striped sail on the first tiles.
+const plankTex = canvasTex(128, 128, (c, w, h) => {
+  c.fillStyle = "#c58a52"; c.fillRect(0, 0, w, h);
+  for (let i = 0; i < 4; i++) { c.fillStyle = ["#cf955c", "#b97f48", "#c88d55", "#bd844d"][i]; c.fillRect(0, i * 32 + 2, w, 28); }
+  c.fillStyle = "#00000030"; for (let i = 0; i < 4; i++) c.fillRect(0, i * 32, w, 2);
+  c.fillStyle = "#5a3a1e"; for (let i = 0; i < 4; i++) { c.fillRect(8, i * 32 + 14, 4, 4); c.fillRect(w - 12, i * 32 + 14, 4, 4); }
+});
+const tileMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1.94, 0.32, 1.94), new THREE.MeshStandardMaterial({ map: plankTex, roughness: 0.9 }), N * N);
+tileMesh.castShadow = tileMesh.receiveShadow = true; tileMesh.frustumCulled = false; tileMesh.count = 0; scene.add(tileMesh);
+const raftGroup = new THREE.Group(); scene.add(raftGroup); // the mast and sail ride with the raft's bob
+{
+  const mast = mesh(new THREE.CylinderGeometry(0.12, 0.15, 6, 8), mat("#7a5032"), 0, 3.2, 0); mast.castShadow = true;
+  const sailTex = canvasTex(64, 64, (c) => { for (let i = 0; i < 8; i++) { c.fillStyle = i % 2 ? "#f4efe2" : "#e8584f"; c.fillRect(0, i * 8, 64, 8); } });
+  const sailGeo = new THREE.PlaneGeometry(2.6, 3.2, 6, 6), sp = sailGeo.attributes.position;
+  for (let i = 0; i < sp.count; i++) sp.setZ(i, Math.sin((sp.getY(i) + 1.6) / 3.2 * Math.PI) * 0.45); // bellied by the wind
+  const sail = mesh(sailGeo, new THREE.MeshStandardMaterial({ map: sailTex, side: THREE.DoubleSide, roughness: 0.9 }), 0.15, 4, 0); sail.castShadow = true;
+  sail.rotation.y = Math.PI / 2; // square to the wind, which blows the way the debris drifts (+x)
+  const flag = mesh(new THREE.PlaneGeometry(0.9, 0.5), new THREE.MeshBasicMaterial({ color: "#ffd23f", side: THREE.DoubleSide }), 0.45, 6.05, 0);
+  const barrel = mesh(new THREE.CylinderGeometry(0.4, 0.4, 0.9, 12), mat("#8a5a33"), 1.9, 0.6, 1.9); barrel.castShadow = true;
+  raftGroup.add(mast, sail, flag, barrel);
+  raftGroup.userData.flag = flag;
+}
+const PLANK = new THREE.Color("#ffffff"), WORN = new THREE.Color("#7a5a44"), tmpC = new THREE.Color();
+const M = new THREE.Matrix4(), Q = new THREE.Quaternion(), E = new THREE.Euler(0, 0, 0, "YXZ"), P3 = new THREE.Vector3(), S3 = new THREE.Vector3(), ONE = new THREE.Vector3(1, 1, 1);
+const tileViews = new Map(); // spot -> { ch, born } for pop-in and break effects
+let raftBob = 0;
+function syncRaft(t, dt) {
+  const g = raftNow();
+  raftBob = Math.sin(t * 1.4) * 0.06;
+  raftGroup.position.y = raftBob; raftGroup.userData.flag.rotation.y = Math.sin(t * 5) * 0.4;
+  let n = 0;
+  for (let i = 0; i < N * N; i++) {
+    const ch = g[i], v = tileViews.get(i);
+    if (!isTile(ch)) { if (v) { tileViews.delete(i); burst(spotX(i), 0.2, spotZ(i), "#c58a52", 16, 4); burst(spotX(i), 0.1, spotZ(i), "#e8f8ff", 10, 3); sfx("crack"); } continue; }
+    if (!v) tileViews.set(i, { ch, born: tileViews.size > 0 && seenRaft ? t : -9 });
+    else if (v.ch !== ch) { if (tileHp(ch) < tileHp(v.ch)) { burst(spotX(i), 0.3, spotZ(i), "#a5743f", 6, 3); v.shake = 0.3; } v.ch = ch; }
+    const w = tileViews.get(i), grow = Math.min(1, (t - w.born) / 0.35), s = grow < 1 ? 0.3 + 0.7 * (1 + 2.7 * (grow - 1) ** 3 + 1.7 * (grow - 1) ** 2) : 1;
+    w.shake = Math.max(0, (w.shake || 0) - dt);
+    const tilt = ch === "#" ? 0 : (3 - tileHp(ch)) * 0.035 * Math.sin(i * 7.1), wob = Math.sin(w.shake * 60) * w.shake * 0.4;
+    E.set(tilt + wob, 0, tilt * 0.6); Q.setFromEuler(E);
+    M.compose(P3.set(spotX(i), 0.12 + raftBob + Math.sin(t * 1.6 + i) * 0.025, spotZ(i)), Q, S3.set(s, 1, s)); tileMesh.setMatrixAt(n, M);
+    tileMesh.setColorAt(n++, ch === "#" ? PLANK : tmpC.copy(WORN).lerp(PLANK, (tileHp(ch) - 1) / (CONFIG.tileHp - 1) * 0.7 + 0.3));
+  }
+  if (hosting() || S.shared.raft !== undefined) seenRaft = true; // the real raft is here: new tiles pop in from now on
+  tileMesh.count = n; tileMesh.instanceMatrix.needsUpdate = true; if (tileMesh.instanceColor) tileMesh.instanceColor.needsUpdate = true;
+}
+let seenRaft = false;
+// Debris: a small model per piece, bobbing on the waves.
+const DEBRIS_MODELS = {
+  plank: () => mesh(new THREE.BoxGeometry(1.8, 0.18, 0.45), mat("#b97f48")),
+  rope: () => { const g = new THREE.Group(); for (let k = 0; k < 3; k++) { const r = mesh(new THREE.TorusGeometry(0.42 - k * 0.1, 0.09, 6, 18), mat("#e3c98f")); r.rotation.x = Math.PI / 2; r.position.y = k * 0.1; g.add(r); } return g; },
+  barrel: () => { const g = new THREE.Group(), b = mesh(new THREE.CylinderGeometry(0.45, 0.45, 1, 12), mat("#8a5a33")); b.rotation.z = Math.PI / 2; g.add(b); for (const x of [-0.3, 0.3]) { const r = mesh(new THREE.TorusGeometry(0.46, 0.04, 6, 16), mat("#444")); r.rotation.y = Math.PI / 2; r.position.x = x; g.add(r); } return g; },
+  crate: () => mesh(new THREE.BoxGeometry(1, 1, 1), new THREE.MeshStandardMaterial({ map: plankTex, color: "#e0b080" })),
+};
+const debrisViews = new Map(); // id -> { g, x, z, type, by }
+function syncDebris(dt, t) {
+  const seen = new Set(), k = hosting() ? 1 : 1 - Math.pow(0.003, dt);
+  for (const d of debrisList()) {
+    seen.add(d.id);
+    let v = debrisViews.get(d.id);
+    if (!v) { const g = DEBRIS_MODELS[d.type](); g.traverse((o) => { o.castShadow = true; }); scene.add(g); v = { g, x: d.x, z: d.z, type: d.type, spin: Math.random() * TAU }; debrisViews.set(d.id, v); }
+    v.by = d.by; v.x += (d.x - v.x) * k; v.z += (d.z - v.z) * k;
+    v.g.position.set(v.x, waveY(v.x, v.z, t) - 0.1, v.z); v.g.rotation.set(Math.sin(t * 1.7 + d.id) * 0.15, v.spin + t * 0.15, Math.cos(t * 1.3 + d.id) * 0.12);
+  }
+  for (const [id, v] of debrisViews) if (!seen.has(id)) {
+    scene.remove(v.g); debrisViews.delete(id);
+    if (v.by) { // reeled in: the crew gets it
+      const who = team().find((s) => s.id === v.by), val = DEBRIS[v.type];
+      burst(v.x, 0.6, v.z, "#e8f8ff", 8, 3);
+      if (who) popText(who.x, who.z, [val.w && `+${val.w} wood`, val.r && `+${val.r} rope`].filter(Boolean).join(" "));
+      if (v.by === net.sessionId) sfx("catch");
+    }
+  }
+}
+// The shark: a grey body, a fin that cuts the water, a tail that swishes, a jaw that opens to bite.
+const shark = new THREE.Group(); scene.add(shark);
+const sharkBody = new THREE.Group(); shark.add(sharkBody);
+const sharkSkin = mat("#6f7f8f", { roughness: 0.5 }), sharkBelly = mat("#e8eef2", { roughness: 0.6 });
+sharkBody.add(mesh(new THREE.SphereGeometry(0.8, 14, 10).scale(0.8, 0.7, 2.4), sharkSkin, 0, 0, 0), mesh(new THREE.SphereGeometry(0.7, 12, 8).scale(0.7, 0.4, 2), sharkBelly, 0, -0.25, 0.1));
+const fin = mesh(new THREE.ConeGeometry(0.5, 1.3, 4).scale(0.25, 1, 1), sharkSkin, 0, 0.9, -0.2); fin.rotation.x = -0.35; sharkBody.add(fin);
+const tail = new THREE.Group(); tail.position.z = -1.8; sharkBody.add(tail);
+tail.add(mesh(new THREE.ConeGeometry(0.45, 1.2, 4).scale(0.2, 1, 1), sharkSkin, 0, 0.35, -0.3), mesh(new THREE.ConeGeometry(0.35, 0.9, 4).scale(0.2, 1, 1).rotateX(Math.PI), sharkSkin, 0, -0.3, -0.25));
+const jaw = mesh(new THREE.BoxGeometry(0.8, 0.12, 0.8), mat("#b83a4a"), 0, -0.15, 1.6); sharkBody.add(jaw);
+for (const s of [-1, 1]) sharkBody.add(mesh(new THREE.SphereGeometry(0.08, 6, 5), new THREE.MeshBasicMaterial({ color: "#111" }), s * 0.42, 0.18, 1.35));
+sharkBody.traverse((o) => { o.castShadow = true; });
+const sharkView = { x: 30, z: 0, h: 0, hits: CONFIG.sharkHits, flash: 0, st: "circle" };
+function syncShark(dt, t) {
+  const s = sharkNow(), k = hosting() ? 1 : 1 - Math.pow(0.004, dt);
+  if (s.hits < sharkView.hits) { sharkView.flash = 0.25; burst(sharkView.x, 0.8, sharkView.z, "#e8f8ff", 10, 4); sfx("smack"); }
+  if (s.st === "flee" && sharkView.st !== "flee") toast("The shark swims off. Nice!");
+  sharkView.hits = s.hits; sharkView.st = s.st;
+  sharkView.x += (s.x - sharkView.x) * k; sharkView.z += (s.z - sharkView.z) * k; sharkView.h += Math.atan2(Math.sin(s.h - sharkView.h), Math.cos(s.h - sharkView.h)) * k;
+  const biting = s.st === "bite", lunge = biting ? Math.max(0, Math.sin(t * 7)) : 0;
+  shark.position.set(sharkView.x, biting ? 0.1 + lunge * 0.35 : -0.22 + Math.sin(t * 2) * 0.05, sharkView.z); shark.rotation.y = sharkView.h;
+  sharkBody.rotation.x = biting ? -0.35 * lunge : 0;
+  tail.rotation.y = Math.sin(t * (biting ? 14 : 7)) * 0.45; jaw.rotation.x = biting ? lunge * 0.6 : 0.05;
+  sharkView.flash -= dt; sharkSkin.emissive.set(sharkView.flash > 0 ? "#ffffff" : "#000000");
+}
+
+// ── CREW ────────────────────────────────────────────────────────────────────────────
+const skin = mat("#ffd9b8"), dark = mat("#1d2433"), shoe = mat("#3a3f4f"), ropeMat = mat("#f3e3c0");
+const ropeGeo = new THREE.CylinderGeometry(0.035, 0.035, 1, 5).translate(0, 0.5, 0), UP = new THREE.Vector3(0, 1, 0), handAt = new THREE.Vector3(), ropeDir = new THREE.Vector3();
+function nameTag(text) {
+  const tex = canvasTex(256, 64, (c) => { c.font = "bold 32px system-ui"; c.textAlign = "center"; c.lineWidth = 6; c.strokeStyle = "#000b"; c.strokeText(text, 128, 44); c.fillStyle = "#fff"; c.fillText(text, 128, 44); });
+  const s = new THREE.Sprite(new THREE.SpriteMaterial({ map: tex, depthTest: false })); s.scale.set(3.6, 0.9, 1); s.position.y = 2.55; return s;
+}
+const capsule = new THREE.CapsuleGeometry(0.4, 0.4, 4, 12), headGeo = new THREE.SphereGeometry(0.42, 16, 12), armGeo = new THREE.CapsuleGeometry(0.1, 0.32, 3, 8);
+/** A crew member: round body in its color, a bandana, a hook on a rope. */
+function makeCrew(color, name) {
+  const g = new THREE.Group(), rig = new THREE.Group(), body = mat(color);
+  rig.add(mesh(capsule, body, 0, 0.75, 0));
+  const head = mesh(headGeo, skin, 0, 1.5, 0); rig.add(head);
+  rig.add(mesh(new THREE.SphereGeometry(0.44, 14, 8, 0, TAU, 0, Math.PI / 2.4), body, 0, 1.55, 0));
+  for (const s of [-1, 1]) rig.add(mesh(new THREE.SphereGeometry(0.055, 8, 6), dark, s * 0.14, 1.53, 0.38));
+  const arms = [-1, 1].map((s) => { const p = new THREE.Group(); p.position.set(s * 0.47, 1.05, 0); rig.add(p); p.add(mesh(armGeo, body, 0, -0.22, 0)); return p; });
+  for (const s of [-1, 1]) rig.add(mesh(new THREE.SphereGeometry(0.15, 10, 8), shoe, s * 0.2, 0.12, 0.05));
+  rig.traverse((o) => { o.castShadow = true; });
+  const hook = mesh(new THREE.TorusGeometry(0.18, 0.05, 6, 12, Math.PI * 1.4), mat("#9aa3a8", { metalness: 0.6, roughness: 0.3 }));
+  const rope = new THREE.Mesh(ropeGeo, ropeMat); // stretched from the hand to the hook every frame
+  hook.visible = rope.visible = false; scene.add(hook, rope);
+  g.add(rig); if (name) g.add(nameTag(name));
+  g.userData = { rig, arms, hook, rope, walk: 0, px: 0, pz: 0 };
+  scene.add(g); return g;
+}
+function removeCrew(g) { scene.remove(g, g.userData.hook, g.userData.rope); }
+/** Pose crew model g for crew member s: walking, swimming, throwing; its hook at (hx, hz) or put away. */
+function poseCrew(g, s, t) {
+  const u = g.userData, moved = Math.hypot(s.x - u.px, s.z - u.pz);
+  u.walk += moved * 2.8; u.px = s.x; u.pz = s.z;
+  const swim = !!s.sw, y = swim ? -1.05 + waveY(s.x, s.z, t) : raftBob + 0.28;
+  g.position.set(s.x, y, s.z); g.rotation.y = s.a;
+  const step = Math.sin(u.walk) * Math.min(1, moved * 25);
+  u.rig.position.y = swim ? 0 : Math.abs(step) * 0.08;
+  const throwing = s.hx !== undefined && s.hx !== null;
+  u.arms[0].rotation.set(swim ? -2.6 + Math.sin(t * 6) * 0.8 : step * 0.6, 0, -0.15);
+  u.arms[1].rotation.set(swim ? -2.6 - Math.sin(t * 6) * 0.8 : throwing ? -1.7 : -step * 0.6, 0, 0.15);
+  u.hook.visible = u.rope.visible = throwing;
+  if (throwing) {
+    const hy = s.hy ?? 0.1;
+    u.hook.position.set(s.hx, hy + waveY(s.hx, s.hz, t) * 0.5, s.hz); u.hook.rotation.set(Math.PI / 2, 0, t * 4);
+    handAt.set(0.5, 1.2, 0.4).applyAxisAngle(UP, s.a).add(g.position);
+    ropeDir.copy(u.hook.position).sub(handAt);
+    u.rope.position.copy(handAt); u.rope.scale.set(1, Math.max(0.01, ropeDir.length()), 1); u.rope.quaternion.setFromUnitVectors(UP, ropeDir.normalize());
+  }
+}
+
+// ── EFFECTS ─────────────────────────────────────────────────────────────────────────
+// Particles: little cubes that pop, fall and shrink (splashes, wood chips).
+const MAXP = 500, bits = [], colorCache = new Map(), WHITE = new THREE.Color("#fff");
+const bitMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(0.15, 0.15, 0.15), new THREE.MeshBasicMaterial(), MAXP);
+bitMesh.frustumCulled = false; bitMesh.count = 0; for (let i = 0; i < MAXP; i++) bitMesh.setColorAt(i, WHITE); scene.add(bitMesh);
+function burst(x, y, z, color, n, speed = 3) {
+  if (!colorCache.has(color)) colorCache.set(color, new THREE.Color(color));
+  for (let i = 0; i < n; i++) {
+    if (bits.length >= MAXP) bits.shift();
+    const a = Math.random() * TAU, s = speed * (0.4 + Math.random());
+    bits.push({ x, y, z, vx: Math.sin(a) * s, vy: 1.5 + Math.random() * speed, vz: Math.cos(a) * s, life: 0.5 + Math.random() * 0.4, c: colorCache.get(color) });
+  }
+}
+function stepBits(dt) {
+  let n = 0;
+  for (let i = bits.length - 1; i >= 0; i--) {
+    const p = bits[i]; p.life -= dt;
+    if (p.life <= 0) { bits.splice(i, 1); continue; }
+    p.vy -= 14 * dt; p.x += p.vx * dt; p.y = Math.max(-0.2, p.y + p.vy * dt); p.z += p.vz * dt;
+  }
+  for (const p of bits) { const s = Math.min(1, p.life * 2.5); M.compose(P3.set(p.x, p.y, p.z), Q.identity(), S3.set(s, s, s)); bitMesh.setMatrixAt(n, M); bitMesh.setColorAt(n++, p.c); }
+  bitMesh.count = n; bitMesh.instanceMatrix.needsUpdate = true; if (bitMesh.instanceColor) bitMesh.instanceColor.needsUpdate = true;
+}
+// "+2 wood" pops that float up from where a catch landed.
+const pops = [];
+function popText(x, z, text) {
+  if (ATTRACT || !text) return;
+  const el = document.createElement("div"); el.className = "pop"; el.textContent = text; document.body.append(el);
+  pops.push({ el, x, z, t: 0 });
+}
+function stepPops(dt) {
+  for (let i = pops.length - 1; i >= 0; i--) {
+    const p = pops[i]; p.t += dt;
+    if (p.t > 1.3) { p.el.remove(); pops.splice(i, 1); continue; }
+    P3.set(p.x, 2.6 + p.t * 1.2, p.z).project(camera);
+    p.el.style.transform = `translate(${(P3.x + 1) / 2 * innerWidth}px, ${(1 - P3.y) / 2 * innerHeight}px) translate(-50%, -50%)`;
+    p.el.style.opacity = String(Math.min(1, (1.3 - p.t) * 2));
+  }
+}
+let audio = null; // made on the first tap or key (browsers block sound before that)
+function sfx(kind) {
+  if (!audio || ATTRACT) return;
+  const [f0, f1, dur, vol, type] = { throw: [500, 900, 0.12, 0.04, "triangle"], splash: [300, 80, 0.2, 0.05, "sine"], catch: [660, 1320, 0.15, 0.06, "triangle"],
+    build: [180, 120, 0.12, 0.09, "square"], crack: [200, 50, 0.3, 0.09, "sawtooth"], smack: [140, 60, 0.15, 0.1, "square"], chomp: [120, 40, 0.5, 0.12, "sawtooth"] }[kind] || [];
+  if (!f0) return;
+  const t = audio.currentTime, o = audio.createOscillator(), g = audio.createGain();
+  o.type = type; o.frequency.setValueAtTime(f0, t); o.frequency.exponentialRampToValueAtTime(f1, t + dur);
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g).connect(audio.destination); o.start(t); o.stop(t + dur);
+}
+
+// ── SEA (HOST) ──────────────────────────────────────────────────────────────────────
+const host = { acting: false, adopted: false, raft: [], crew: { w: 0, r: 0, hooked: {} }, rev: 0, debris: new Map(), nextId: 1, spawnIn: 0,
+  shark: null, wet: new Map(), bots: new Map(), raftDirty: false, crewDirty: false, revDirty: false, lastRaft: 0, lastCrew: 0, lastDebris: 0, lastShark: 0, lastBots: 0,
+  debrisJson: "", sharkJson: "", botsJson: "" };
+const readCrew = () => parseOnce("crew", S.shared.crew, (raw) => { const o = parse(raw, null); return o && typeof o.w === "number" ? o : { w: 0, r: 0, hooked: {} }; });
+const readDebris = () => parseOnce("debris", S.shared.debris, (raw) => { const o = parse(raw, []); return Array.isArray(o) ? o.filter((a) => Array.isArray(a) && DEBRIS[a[1]]).map((a) => ({ id: a[0], type: a[1], x: a[2], z: a[3], by: a[4] || null })) : []; });
+const readShark = () => parseOnce("shark", S.shared.shark, (raw) => { const o = parse(raw, null); return o && typeof o.x === "number" ? o : { x: 30, z: 0, h: 0, st: "circle", hits: CONFIG.sharkHits, tile: -1, until: 0 }; });
+const readBots = () => parseOnce("bots", S.shared.bots, (raw) => { const o = parse(raw, []); return Array.isArray(o) ? o.filter((b) => b && typeof b.id === "string") : []; });
+const hosting = () => host.acting && host.adopted;
+const raftNow = () => (hosting() ? host.raft : parseOnce("raft", S.shared.raft, decodeRaft));
+const crewNow = () => (hosting() ? host.crew : readCrew());
+const debrisList = () => (hosting() ? [...host.debris.values()] : readDebris());
+const sharkNow = () => (hosting() ? host.shark : readShark());
+const botList = () => (hosting() ? [...host.bots.values()] : readBots());
+const dist = (a, b) => Math.hypot(a.x - b.x, a.z - b.z);
+
+/** Become host: take over the sea exactly as state has it. */
+function adopt() {
+  host.adopted = true;
+  host.raft = parseOnce("raft", S.shared.raft, decodeRaft).slice();
+  const c = readCrew(); host.crew = { w: c.w, r: c.r, hooked: { ...c.hooked } };
+  host.rev = Number(S.shared.rev) || 0;
+  host.debris.clear(); for (const d of readDebris()) host.debris.set(d.id, { ...d });
+  host.nextId = (Math.max(0, ...host.debris.keys()) + 1) % 10000;
+  host.shark = { ...readShark() };
+  host.bots.clear(); readBots().forEach((b, i) => host.bots.set(b.id, { ...b, hk: null, goal: null, think: 0, cd: 0, post: TAU * i / CONFIG.seats, slot: i * 1.9 + 0.7 }));
+  host.debrisJson = S.shared.debris; host.sharkJson = S.shared.shark; host.botsJson = S.shared.bots;
+}
+/** The first player into an empty room: the founding raft, or the raft it remembers. */
+function newRaft(saved) {
+  host.adopted = true;
+  host.raft = saved ? decodeRaft(saved.world.raft) : foundingRaft();
+  host.crew = { w: saved ? Math.max(0, saved.world.w | 0) : CONFIG.startStash.w, r: saved ? Math.max(0, saved.world.r | 0) : CONFIG.startStash.r, hooked: {} };
+  host.rev = saved ? saved.rev : 0;
+  if (ATTRACT) { const rnd = mulberry32(4); for (let k = 0; k < 22; k++) { const spots = host.raft.map((_, i) => i).filter((i) => canBuild(host.raft, i) && Math.hypot(spotX(i), spotZ(i)) < 8); if (spots.length) host.raft[spots[Math.floor(rnd() * spots.length)]] = String.fromCharCode(96 + 1 + Math.floor(rnd() * CONFIG.tileHp)); } }
+  host.debris.clear();
+  for (let k = 0; k < CONFIG.maxDebris * 0.7; k++) spawnDebris(-30 + Math.random() * 60); // the sea is already full of things
+  host.shark = { x: 30, z: 0, h: -Math.PI / 2, st: "circle", hits: CONFIG.sharkHits, tile: -1, until: Date.now() + 6000, ang: 0 };
+  host.raftDirty = host.crewDirty = host.revDirty = true;
+  if (saved) memoryAdopted("");
+}
+// The game's half of WORLD MEMORY.
+function worldSnapshot() { const c = crewNow(); return { raft: encodeRaft(raftNow()), w: c.w, r: c.r }; }
+function liveRev() { return hosting() ? host.rev : typeof S.shared.rev === "number" ? S.shared.rev : -1; }
+function loadWorld(snap, rev) {
+  if (!snap || typeof snap.raft !== "string" || typeof rev !== "number") return false;
+  host.raft = decodeRaft(snap.raft); host.crew.w = Math.max(host.crew.w, snap.w | 0); host.crew.r = Math.max(host.crew.r, snap.r | 0);
+  host.rev = rev; host.raftDirty = host.crewDirty = host.revDirty = true;
+  return true;
+}
+
+/** Bots fill the crew up to CONFIG.seats; one leaves when a person joins. A bot never wears a person's color. */
+function fitBots() {
+  const humans = livePlayers().filter((id) => !(ATTRACT && id === net.sessionId)).length, want = Math.max(0, CONFIG.seats - humans);
+  const people = new Set(team().filter((s) => !s.bot).map((s) => s.color));
+  for (const b of host.bots.values()) if (people.has(b.color)) { const used = new Set(team().map((s) => s.color)); b.color = COLORS.find((c) => !used.has(c)) || b.color; }
+  while (host.bots.size > want) host.bots.delete([...host.bots.keys()].pop());
+  while (host.bots.size < want) {
+    const taken = new Set(team().map((s) => s.color)), names = new Set([...host.bots.values()].map((b) => b.name));
+    const id = "b" + Math.random().toString(36).slice(2, 6), post = TAU * host.bots.size / CONFIG.seats + 0.4;
+    host.bots.set(id, { id, name: BOT_NAMES.find((n) => !names.has(n)) || "Bot", color: COLORS.find((c) => !taken.has(c)) || "#ccc",
+      x: Math.sin(post) * 1.6, z: Math.cos(post) * 1.6, a: post, sw: 0, hx: null, hz: null, hk: null, goal: null, think: 0, cd: 1, post, slot: post * 2.3 });
+  }
+}
+function spawnDebris(x) {
+  const total = Object.values(DEBRIS).reduce((n, d) => n + d.weight, 0);
+  let roll = Math.random() * total, type = "plank";
+  for (const [k, d] of Object.entries(DEBRIS)) { roll -= d.weight; if (roll <= 0) { type = k; break; } }
+  const z = (Math.random() < 0.5 ? -1 : 1) * (3 + Math.random() ** 1.6 * (CONFIG.debrisSpread - 3)), id = host.nextId; host.nextId = (host.nextId + 1) % 10000; // more of it passes close by
+  host.debris.set(id, { id, type, x: x ?? -40 - Math.random() * 4, z, by: null });
+}
+/** Where crew member `id` stands (people from state, bots, me), or null. */
+const crewPos = (id) => team().find((s) => s.id === id) || null;
+/** Debris drifts past (and slides around the raft); hooked pieces are reeled to their catcher. */
+function stepDebris(dt) {
+  for (const d of [...host.debris.values()]) {
+    if (d.by) {
+      const who = crewPos(d.by);
+      if (!who) { d.by = null; continue; }
+      const dx = who.x - d.x, dz = who.z - d.z, l = Math.hypot(dx, dz);
+      if (l < 1.5) { // landed: it goes into the crew's stash
+        const v = DEBRIS[d.type]; host.crew.w += v.w; host.crew.r += v.r; host.crew.hooked[d.by] = (host.crew.hooked[d.by] || 0) + 1;
+        host.debris.delete(d.id); host.crewDirty = true; continue;
+      }
+      d.x += dx / l * Math.min(l, CONFIG.reelSpeed * dt); d.z += dz / l * Math.min(l, CONFIG.reelSpeed * dt);
+      continue;
+    }
+    d.x += CONFIG.drift * dt;
+    if (onRaft(host.raft, d.x + 1.2, d.z) || onRaft(host.raft, d.x, d.z)) d.z += Math.sign(d.z || 1) * CONFIG.drift * 1.5 * dt; // slide around the raft
+    if (d.x > 42) host.debris.delete(d.id);
+  }
+  host.spawnIn -= dt;
+  if (host.spawnIn <= 0 && host.debris.size < CONFIG.maxDebris) { host.spawnIn = CONFIG.debrisEvery * (0.6 + Math.random() * 0.8); spawnDebris(); }
+}
+/** The shark: circle, pick an edge tile, swim to it, bite until it breaks; hunt swimmers; flee when smacked enough. */
+function stepShark(dt) {
+  const s = host.shark, t = Date.now(), g = host.raft, R = raftRadius(g) + 3.5;
+  const now = performance.now(), wet = team().filter((p) => p.sw && !p.bot);
+  for (const id of host.wet.keys()) if (!wet.some((p) => p.id === id)) host.wet.delete(id);
+  for (const p of wet) if (!host.wet.has(p.id)) host.wet.set(p.id, now);
+  const swimmer = wet.find((p) => now - host.wet.get(p.id) > CONFIG.sharkGraceMs);
+  let tx = s.x, tz = s.z, speed = CONFIG.sharkSpeed;
+  if (s.st === "flee") {
+    const a = Math.atan2(s.x, s.z); tx = Math.sin(a) * 34; tz = Math.cos(a) * 34;
+    if (t >= s.until) Object.assign(s, { st: "circle", hits: CONFIG.sharkHits, until: t + 3000 });
+  } else if (swimmer && Math.hypot(swimmer.x, swimmer.z) < R + 8) { // someone is in the water
+    s.st = "hunt"; s.tile = -1; tx = swimmer.x; tz = swimmer.z; speed *= 1.15;
+    if (Math.hypot(tx - s.x, tz - s.z) < 1.3) { chomp(swimmer.id); Object.assign(s, { st: "circle", until: t + 4000 }); }
+  } else if (s.st === "circle" || s.st === "hunt") {
+    if (s.st === "hunt") Object.assign(s, { st: "circle", until: t + 3000 });
+    s.ang = (s.ang ?? Math.atan2(s.x, s.z)) + speed / R * dt * 0.8;
+    tx = Math.sin(s.ang) * R; tz = Math.cos(s.ang) * R;
+    if (t >= s.until) { const edges = edgeTiles(g); if (edges.length) Object.assign(s, { st: "go", tile: edges[Math.floor(Math.random() * edges.length)] }); else s.until = t + 4000; }
+  } else if (s.st === "go" || s.st === "bite") {
+    if (!isTile(g[s.tile]) || g[s.tile] === "#") { Object.assign(s, { st: "circle", until: t + rest() }); }
+    else {
+      const water = neighbors(s.tile).filter((n) => g[n] === ".").sort((a, b) => Math.hypot(spotX(a) - s.x, spotZ(a) - s.z) - Math.hypot(spotX(b) - s.x, spotZ(b) - s.z))[0];
+      const ex = spotX(s.tile), ez = spotZ(s.tile), wx = water !== undefined ? spotX(water) : ex * 1.3, wz = water !== undefined ? spotZ(water) : ez * 1.3;
+      tx = ex + (wx - ex) * 0.9; tz = ez + (wz - ez) * 0.9;
+      if (s.st === "go" && Math.hypot(tx - s.x, tz - s.z) < 0.8) Object.assign(s, { st: "bite", until: t + CONFIG.sharkBiteMs });
+      if (s.st === "bite") {
+        speed = 0; s.h = Math.atan2(ex - s.x, ez - s.z);
+        if (t >= s.until) { // chomp the tile
+          const hp = tileHp(g[s.tile]) - 1;
+          g[s.tile] = hp > 0 ? String.fromCharCode(96 + hp) : "."; host.raftDirty = true;
+          if (hp > 0) s.until = t + CONFIG.sharkBiteMs; else Object.assign(s, { st: "circle", until: t + rest() });
+        }
+      }
+    }
+  }
+  if (speed > 0) {
+    const dx = tx - s.x, dz = tz - s.z, d = Math.hypot(dx, dz);
+    if (d > 0.05) {
+      const want = Math.atan2(dx, dz), diff = Math.atan2(Math.sin(want - s.h), Math.cos(want - s.h));
+      s.h += Math.max(-3 * dt, Math.min(3 * dt, diff));
+      const step = Math.min(d, speed * dt * (Math.abs(diff) > 1.2 ? 0.5 : 1));
+      s.x += Math.sin(s.h) * step; s.z += Math.cos(s.h) * step;
+    }
+  }
+  if (onRaft(g, s.x, s.z)) { const l = Math.hypot(s.x, s.z) || 1; s.x += s.x / l * 4 * dt; s.z += s.z / l * 4 * dt; } // never on the planks
+}
+const rest = () => CONFIG.sharkRestMs[0] + Math.random() * (CONFIG.sharkRestMs[1] - CONFIG.sharkRestMs[0]);
+/** The shark got crew member `to` in the water. */
+function chomp(to) {
+  const bot = host.bots.get(to);
+  if (bot) { Object.assign(bot, { ...aboardSpot(), sw: 0, hk: null, hx: null, hz: null }); return; }
+  if (to === net.sessionId) applyChomp(); else net.send("chomp", { to });
+}
+// The intents. Each checks what it is told; the host's own (and the bots') call these directly.
+function applyHook(i, by) {
+  const d = host.debris.get(i), who = crewPos(by);
+  if (!d || d.by || !who || Math.hypot(d.x - who.x, d.z - who.z) > CONFIG.hookRange + 4) return false;
+  d.by = by; return true;
+}
+function applySmack() {
+  const s = host.shark; if (s.st === "flee") return;
+  s.hits--; if (s.hits <= 0) Object.assign(s, { st: "flee", until: Date.now() + CONFIG.sharkFleeMs });
+  else if (s.st === "bite") Object.assign(s, { st: "circle", until: Date.now() + 2500 }); // flinches off the tile
+}
+function applyBuild(i, human) {
+  if (!Number.isInteger(i) || !canBuild(host.raft, i) || host.crew.w < CONFIG.cost.w || host.crew.r < CONFIG.cost.r) return false;
+  host.raft[i] = String.fromCharCode(96 + CONFIG.tileHp); host.crew.w -= CONFIG.cost.w; host.crew.r -= CONFIG.cost.r;
+  host.raftDirty = host.crewDirty = true;
+  if (human) { host.rev++; host.revDirty = true; }
+  return true;
+}
+/** A hook in flight (mine, or a bot's on the host): out to the target, then reel, smack or come back. */
+function stepHook(c, dt) {
+  const h = c.hk;
+  if (!h) { c.hx = c.hz = null; return; }
+  h.t += dt;
+  if (h.phase === "out") {
+    const k = Math.min(1, h.t / h.dur);
+    c.hx = h.sx + (h.tx - h.sx) * k; c.hz = h.sz + (h.tz - h.sz) * k; c.hy = 0.2 + Math.sin(k * Math.PI) * h.dur * 4;
+    if (k >= 1) landHook(c);
+  } else if (h.phase === "reel") {
+    const d = debrisList().find((e) => e.id === h.id);
+    if (d && d.by === c.id) { const v = debrisViews.get(d.id); c.hx = v ? v.x : d.x; c.hz = v ? v.z : d.z; c.hy = 0.3; h.waited = 0; }
+    else if (!d || (h.waited = (h.waited || 0) + dt) > 0.8) { h.phase = "back"; h.t = 0; h.sx = c.hx ?? c.x; h.sz = c.hz ?? c.z; }
+  } else { // back to the hand
+    const k = Math.min(1, h.t / 0.3);
+    c.hx = h.sx + (c.x - h.sx) * k; c.hz = h.sz + (c.z - h.sz) * k; c.hy = 0.6 + k * 0.6;
+    if (k >= 1) { c.hk = null; c.hx = c.hz = null; }
+  }
+}
+function throwHook(c, tx, tz) {
+  const dx = tx - c.x, dz = tz - c.z, d = Math.hypot(dx, dz), k = d > CONFIG.hookRange ? CONFIG.hookRange / d : 1;
+  c.a = Math.atan2(dx, dz);
+  c.hk = { phase: "out", t: 0, sx: c.x, sz: c.z, tx: c.x + dx * k, tz: c.z + dz * k, dur: Math.max(0.15, d * k / CONFIG.hookSpeed) };
+}
+/** The hook splashed down: the shark? a piece of debris? else it comes back. */
+function landHook(c) {
+  const h = c.hk, sv = sharkView, sx = hosting() ? host.shark.x : sv.x, sz = hosting() ? host.shark.z : sv.z;
+  burst(h.tx, 0.1, h.tz, "#e8f8ff", 6, 2);
+  if (Math.hypot(sx - h.tx, sz - h.tz) < 2.2 && sharkNow().st !== "flee") {
+    if (c === me) { sfx("smack"); if (hosting()) applySmack(); else net.send("smack", {}); }
+    else if (hosting()) applySmack();
+    Object.assign(h, { phase: "back", t: 0, sx: h.tx, sz: h.tz }); return;
+  }
+  let best = null, bd = CONFIG.hookGrab;
+  for (const [id, v] of debrisViews) if (!v.by) { const d = Math.hypot(v.x - h.tx, v.z - h.tz); if (d < bd) { bd = d; best = id; } }
+  if (best !== null) {
+    if (c === me) { sfx("splash"); if (hosting()) applyHook(best, c.id); else net.send("hook", { i: best }); }
+    else if (hosting()) applyHook(best, c.id);
+    Object.assign(h, { phase: "reel", id: best, t: 0 }); return;
+  }
+  if (c === me) sfx("splash");
+  Object.assign(h, { phase: "back", t: 0, sx: h.tx, sz: h.tz });
+}
+/** What a bot (or me in the preview) does next: smack the shark, build, or hook the nearest debris. */
+function botGoal(b) {
+  const g = host.raft, s = host.shark, crew = host.crew, reserve = ATTRACT ? 0 : CONFIG.botReserve * livePlayers().length;
+  if ((s.st === "go" || s.st === "bite") && dist(s, b) < 14) return { kind: "shark" };
+  if (crew.w - reserve >= CONFIG.cost.w && crew.r >= CONFIG.cost.r) {
+    const spots = g.map((_, i) => i).filter((i) => canBuild(g, i)).map((i) => ({ i, score: neighbors(i).filter((n) => isTile(g[n])).length * 3 - Math.hypot(spotX(i), spotZ(i)) * 0.4 - Math.hypot(spotX(i) - b.x, spotZ(i) - b.z) * 0.2 + Math.random() }));
+    spots.sort((p, q) => q.score - p.score);
+    if (spots.length) return { kind: "build", i: spots[0].i };
+  }
+  const taken = new Set([...host.bots.values(), me].filter((o) => o !== b && o.goal && o.goal.kind === "hook").map((o) => o.goal.id)); // spread out
+  const free = debrisList().filter((d) => !d.by && d.x > -30 && !taken.has(d.id)).map((d) => ({ d, k: dist(d, b) + Math.random() * 3 })).sort((p, q) => p.k - q.k)[0];
+  if (free) return { kind: "hook", id: free.d.id };
+  b.post += 1.3; return { kind: "walk", x: Math.sin(b.post) * 1.5, z: Math.cos(b.post) * 1.5 };
+}
+/** One bot's brain (also drives me in ?attract): walk the planks to a good spot, then throw or build. */
+function stepBot(b, dt) {
+  const g = host.raft;
+  stepHook(b, dt);
+  b.sw = onRaft(g, b.x, b.z) ? 0 : 1;
+  if (b.sw) { const i = nearestTile(g, b.x, b.z); if (i >= 0) walkTo(b, spotX(i), spotZ(i), CONFIG.swim, dt); return; }
+  b.think -= dt; b.cd -= dt;
+  if (b.think <= 0 || !b.goal) { b.think = 0.7; b.goal = botGoal(b); }
+  const goal = b.goal;
+  let tx, tz, range = 0.5;
+  if (goal.kind === "shark") { tx = host.shark.x; tz = host.shark.z; range = CONFIG.hookRange * 0.7; }
+  else if (goal.kind === "hook") { const d = host.debris.get(goal.id); if (!d || d.by) { b.goal = null; return; } tx = d.x + CONFIG.drift * 0.6; tz = d.z; range = CONFIG.hookRange * 0.85; }
+  else if (goal.kind === "build") { tx = spotX(goal.i); tz = spotZ(goal.i); range = 2.3; }
+  else { tx = goal.x; tz = goal.z; }
+  const d = Math.hypot(tx - b.x, tz - b.z);
+  if (d > range) { // walk along the raft toward it, never off the edge
+    const stand = nearestTile(g, tx, tz), sx = spotX(stand) + Math.sin(b.slot) * 0.6, sz = spotZ(stand) + Math.cos(b.slot) * 0.6; // each bot its own corner of a tile
+    if (Math.hypot(sx - b.x, sz - b.z) > 0.3) walkTo(b, sx, sz, CONFIG.walk * 0.85, dt);
+    else if (goal.kind === "walk") b.goal = null;
+    return;
+  }
+  b.a = Math.atan2(tx - b.x, tz - b.z);
+  if (b.cd > 0) return;
+  if (goal.kind === "build") { applyBuild(goal.i, false); b.goal = null; b.cd = 0.6; return; }
+  if ((goal.kind === "hook" || goal.kind === "shark") && !b.hk) { throwHook(b, tx + (Math.random() - 0.5) * 1.2, tz + (Math.random() - 0.5) * 1.2); b.cd = (CONFIG.botThrowMs[0] + Math.random() * (CONFIG.botThrowMs[1] - CONFIG.botThrowMs[0])) / 1000; }
+  if (goal.kind === "walk") b.goal = null;
+}
+/** Move a crew member toward (x, z), staying on the raft unless it is already in the water. */
+function walkTo(c, x, z, speed, dt) {
+  const dx = x - c.x, dz = z - c.z, d = Math.hypot(dx, dz); if (d < 0.01) return;
+  const step = Math.min(d, speed * dt), nx = c.x + dx / d * step, nz = c.z + dz / d * step;
+  c.a = Math.atan2(dx, dz);
+  if (c.sw || onRaft(host.raft, nx, nz)) { c.x = nx; c.z = nz; }
+  else if (onRaft(host.raft, nx, c.z)) c.x = nx; // round a corner one axis at a time
+  else if (onRaft(host.raft, c.x, nz)) c.z = nz;
+}
+
+function hostTick(dt, now) {
+  if (!host.acting) { host.acting = true; host.adopted = false; }
+  if (!host.adopted) {
+    if (S.shared.raft !== undefined) adopt();
+    else if (memory.ready || now - startedAt > 3000) newRaft(memory.saved);
+    else return; // first one here: wait a moment for my saved raft
+  }
+  fitBots();
+  stepDebris(dt); stepShark(dt);
+  for (const b of host.bots.values()) stepBot(b, dt);
+  // Write what changed: positions ~10/s, the rest at most 4/s.
+  if (now - host.lastDebris > 100) {
+    host.lastDebris = now;
+    const json = JSON.stringify([...host.debris.values()].map((d) => [d.id, d.type, Math.round(d.x * 10) / 10, Math.round(d.z * 10) / 10, d.by || 0]));
+    if (json !== host.debrisJson) { host.debrisJson = json; net.setShared("debris", json); }
+  }
+  if (now - host.lastShark > 100) {
+    host.lastShark = now; const s = host.shark;
+    const json = JSON.stringify({ x: Math.round(s.x * 10) / 10, z: Math.round(s.z * 10) / 10, h: Math.round(s.h * 100) / 100, st: s.st, hits: s.hits, tile: s.tile, until: s.until, ang: Math.round((s.ang || 0) * 100) / 100 });
+    if (json !== host.sharkJson) { host.sharkJson = json; net.setShared("shark", json); }
+  }
+  if (now - host.lastBots > 100) {
+    host.lastBots = now;
+    const r2 = (v) => v === null || v === undefined ? null : Math.round(v * 100) / 100;
+    const json = JSON.stringify([...host.bots.values()].map((b) => ({ id: b.id, name: b.name, color: b.color, x: r2(b.x), z: r2(b.z), a: r2(b.a), sw: b.sw, hx: r2(b.hx), hz: r2(b.hz), hy: r2(b.hy) })));
+    if (json !== host.botsJson) { host.botsJson = json; net.setShared("bots", json); }
+  }
+  if (host.raftDirty && now - host.lastRaft > 250) { host.lastRaft = now; host.raftDirty = false; net.setShared("raft", encodeRaft(host.raft)); }
+  if (host.crewDirty && now - host.lastCrew > 250) { host.lastCrew = now; host.crewDirty = false; net.setShared("crew", JSON.stringify(host.crew)); }
+  if (host.revDirty) { host.revDirty = false; net.setShared("rev", host.rev); }
+}
+
+// ── ME ──────────────────────────────────────────────────────────────────────────────
+const myName = (() => { try { return localStorage.getItem("mpa-name") || ""; } catch { return ""; } })() ||
+  ["Salty", "Sunny", "Breezy", "Lucky", "Misty", "Coral"][Math.floor(Math.random() * 6)] + " " + ["Sailor", "Drifter", "Deckhand", "Captain", "Mate"][Math.floor(Math.random() * 5)];
+const me = { id: "", name: myName, color: COLORS[0], x: 0.6, z: 1.8, a: 0, sw: 0, hk: null, hx: null, hz: null, hy: 0, goal: null, think: 0, cd: 0, post: 0, slot: 4.4,
+  g: null, lastSend: 0, sunk: false, sunkAt: 0, building: false, buildSpot: -1, best: 0, submittedAt: 0 };
+const input = { mx: 0, mz: 0 };
+
+/** The whole crew: live people from state, the bots, and me. */
+function team() {
+  const out = [], live = new Set(livePlayers());
+  for (const [id, p] of Object.entries(S.entities.players || {})) {
+    if (id === net.sessionId || !live.has(id)) continue;
+    const q = parseOnce("p:" + id, p.p, (raw) => { const o = parse(raw, null); return o && typeof o.x === "number" ? o : null; });
+    if (q) out.push({ id, name: p.n || "Sailor", color: p.c || "#ccc", ...q });
+  }
+  for (const b of botList()) out.push({ ...b, bot: true });
+  out.push(me);
+  return out;
+}
+/** A random spot on the first nine tiles (so two people never stand inside each other). */
+const aboardSpot = () => ({ x: (Math.random() - 0.5) * 4.6, z: (Math.random() - 0.5) * 4.6 });
+function throwAt(x, z) {
+  if (me.sunk || me.sw || me.hk || ATTRACT) return;
+  throwHook(me, x, z); sfx("throw");
+}
+function applyChomp() {
+  if (me.sunk) return;
+  me.sunk = true; me.sunkAt = Date.now(); me.hk = null; sfx("chomp");
+  burst(me.x, 0.3, me.z, "#e8f8ff", 20, 5);
+  Object.assign(me, { ...aboardSpot(), sw: 0 }); // you wash back aboard once you close the card
+  if (ATTRACT) { me.sunk = false; return; }
+  const n = tileCount(raftNow()), k = crewNow().hooked?.[net.sessionId] || 0;
+  $("sunkSub").textContent = `Your raft has ${n} tiles. You've hooked ${k} thing${k === 1 ? "" : "s"} this trip.`;
+  $("sunk").hidden = false; showBoard();
+}
+function aboard() { me.sunk = false; $("sunk").hidden = true; publish(true); }
+function myTick(dt) {
+  const g = raftNow();
+  if (me.sunk) { if (Date.now() - me.sunkAt > 9000) aboard(); }
+  else if (ATTRACT) { if (hosting()) stepBot(me, dt); } // the preview plays you like a bot
+  else {
+    const len = Math.hypot(input.mx, input.mz), k = len > 1 ? 1 / len : 1, speed = me.sw ? CONFIG.swim : CONFIG.walk;
+    me.x += input.mx * k * speed * dt; me.z += input.mz * k * speed * dt;
+    if (len > 0.2 && !me.hk) me.a = Math.atan2(input.mx, input.mz);
+    const r = Math.hypot(me.x, me.z); if (r > 34) { me.x *= 34 / r; me.z *= 34 / r; }
+    me.sw = onRaft(g, me.x, me.z) ? 0 : 1;
+    if (me.sw && me.hk && me.hk.phase !== "back") me.hk = null; // no fishing while swimming
+    stepHook(me, dt);
+  }
+  // A bigger raft than I have sailed on: onto the leaderboard (not more than every few seconds).
+  const n = tileCount(g);
+  if (n > me.best && seenRaft && Date.now() - me.submittedAt > 4000) { me.best = n; me.submittedAt = Date.now(); if (board) board.submit(n).catch(() => {}); }
+  publish(false);
+}
+function publish(force) {
+  const now = performance.now();
+  if (!force && now - me.lastSend < 100) return; // ~10/s
+  me.lastSend = now;
+  const r2 = (v) => v === null ? null : Math.round(v * 100) / 100;
+  net.me.set("p", JSON.stringify({ x: r2(me.x), z: r2(me.z), a: r2(me.a), sw: me.sw, hx: r2(me.hx), hz: r2(me.hz), hy: r2(me.hy) }));
+}
+/** Build mode: the green spots next to the raft near me; click/tap one to build it. */
+function tryBuild(i) {
+  const g = raftNow(), c = crewNow();
+  if (!canBuild(g, i)) return false;
+  if (c.w < CONFIG.cost.w || c.r < CONFIG.cost.r) { toast(`A tile costs ${CONFIG.cost.w} wood and ${CONFIG.cost.r} rope. Hook more!`); return true; }
+  if (hosting()) applyBuild(i, true); else net.send("build", { x: i % N, y: Math.floor(i / N) });
+  burst(spotX(i), 0.3, spotZ(i), "#e8f8ff", 10, 3); sfx("build");
+  return true;
+}
+
+// Everyone else's crew, eased toward where they last said they were (hooks too).
+const views = new Map(); // id -> { g, color, x, z, a, hx, hz }
+function syncCrew(dt, t) {
+  const seen = new Set(), k = 1 - Math.pow(0.001, dt);
+  for (const s of team()) {
+    if (s === me) continue;
+    seen.add(s.id);
+    let v = views.get(s.id);
+    if (v && v.color !== s.color) { removeCrew(v.g); v = null; }
+    if (!v) { v = { g: makeCrew(s.color, ATTRACT ? "" : s.name), color: s.color, x: s.x, z: s.z, a: s.a, hx: s.hx, hz: s.hz }; views.set(s.id, v); }
+    const snap = s.bot && hosting();
+    v.x += (s.x - v.x) * (snap ? 1 : k); v.z += (s.z - v.z) * (snap ? 1 : k); v.a += Math.atan2(Math.sin(s.a - v.a), Math.cos(s.a - v.a)) * (snap ? 1 : k);
+    if (s.hx === null || s.hx === undefined) v.hx = v.hz = null;
+    else if (v.hx === null || v.hx === undefined || snap) { v.hx = s.hx; v.hz = s.hz; }
+    else { v.hx += (s.hx - v.hx) * k; v.hz += (s.hz - v.hz) * k; }
+    poseCrew(v.g, { ...s, x: v.x, z: v.z, a: v.a, hx: v.hx, hz: v.hz }, t);
+  }
+  for (const [id, v] of views) if (!seen.has(id)) { removeCrew(v.g); views.delete(id); }
+  if (me.g && me.g.userData.color !== me.color) { removeCrew(me.g); me.g = null; }
+  if (!me.g) { me.g = makeCrew(me.color, ""); me.g.userData.color = me.color; }
+  poseCrew(me.g, me, t);
+}
+/** Two people in one color: the one with the higher sessionId picks a color nobody (and no bot) uses. */
+function fixColor() {
+  const others = Object.entries(S.entities.players || {}).filter(([id]) => id !== net.sessionId);
+  if (!others.some(([id, p]) => p.c === me.color && id < net.sessionId)) return;
+  const taken = new Set([...others.map(([, p]) => p.c), ...botList().map((b) => b.color)]), free = COLORS.find((c) => !taken.has(c));
+  if (free) { me.color = free; net.me.set("c", free); }
+}
+// Build-mode ghosts: green spots where a new tile can go, near me.
+const ghostMat = new THREE.MeshBasicMaterial({ color: "#5cff9d", transparent: true, opacity: 0.35, depthWrite: false });
+const ghostMesh = new THREE.InstancedMesh(new THREE.BoxGeometry(1.8, 0.2, 1.8), ghostMat, 64); ghostMesh.frustumCulled = false; ghostMesh.count = 0; scene.add(ghostMesh);
+const aimRing = mesh(new THREE.RingGeometry(0.9, 1.15, 32), new THREE.MeshBasicMaterial({ color: "#ffffff", transparent: true, opacity: 0.6, depthWrite: false }), 0, 0.05, 0);
+aimRing.rotation.x = -Math.PI / 2; aimRing.visible = false; scene.add(aimRing);
+function buildSpotsNear() { const g = raftNow(); return g.map((_, i) => i).filter((i) => canBuild(g, i) && Math.hypot(spotX(i) - me.x, spotZ(i) - me.z) < 9); }
+function syncGhosts(t) {
+  ghostMesh.count = 0;
+  if (!me.building || ATTRACT) return;
+  let n = 0;
+  for (const i of buildSpotsNear().slice(0, 64)) { M.compose(P3.set(spotX(i), 0.05 + Math.sin(t * 3) * 0.05, spotZ(i)), Q.identity(), i === me.buildSpot ? S3.set(1.05, 1.6, 1.05) : ONE); ghostMesh.setMatrixAt(n++, M); }
+  ghostMesh.count = n; ghostMesh.instanceMatrix.needsUpdate = true;
+}
+
+// ── HUD ─────────────────────────────────────────────────────────────────────────────
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+const touchUI = matchMedia("(pointer: coarse)").matches && !ATTRACT;
+document.body.classList.toggle("touch", touchUI);
+document.body.classList.toggle("attract", ATTRACT);
+let board = null, netDown = false;
+const startedAt = performance.now();
+function toast(text) { const t = $("toast"); t.textContent = text; t.classList.add("on"); clearTimeout(toast.t); toast.t = setTimeout(() => t.classList.remove("on"), 3200); }
+function setBuilding(on) { me.building = on; $("build").classList.toggle("on", on); }
+function hud() {
+  if (ATTRACT) { $("net").textContent = ""; return; }
+  const c = crewNow(), g = raftNow(), n = tileCount(g), s = sharkNow();
+  $("stash").innerHTML = `🪵 ${c.w} &nbsp;🧵 ${c.r}<small>Raft: ${n} tiles</small>`;
+  $("build").querySelector("small").textContent = me.building ? "tap a green spot" : `${CONFIG.cost.w} wood + ${CONFIG.cost.r} rope`;
+  $("build").firstChild.textContent = me.building ? "DONE" : "BUILD";
+  $("build").classList.toggle("poor", c.w < CONFIG.cost.w || c.r < CONFIG.cost.r);
+  $("team").innerHTML = team().map((p) => `<div class="${p === me ? "mine" : ""}">${esc(p === me ? "You" : p.name)}${p.sw ? " 🌊" : ""} · ${c.hooked?.[p.id] || 0} hooked<i style="background:${esc(p.color)}"></i></div>`).join("");
+  const alert = s.st === "bite" ? "The shark is biting the raft! Hook it!" : s.st === "hunt" ? "Shark! Get out of the water!" : me.sw ? "You're swimming. Climb back onto the raft" : "";
+  $("alert").textContent = alert; $("alert").classList.toggle("on", !!alert);
+  const early = performance.now() - startedAt < 12000;
+  $("hint").textContent = touchUI ? "Left thumb walks · tap the sea to throw your hook · tap BUILD to add tiles" : "WASD to walk · click the sea to throw your hook at debris (or the shark) · B to build";
+  $("hint").style.opacity = early ? 1 : 0;
+  const live = livePlayers().length;
+  $("net").textContent = netDown ? "Reconnecting…" : net.offline ? "Offline: playing with bots" : `Online · ${live} player${live === 1 ? "" : "s"}${isHost() ? " · you run the sea" : ""}`;
+  if (me.sunk) $("sunkNext").textContent = `You climb back aboard in ${Math.max(0, Math.ceil((me.sunkAt + 9000 - Date.now()) / 1000))}s`;
+}
+function showBoard() {
+  const list = $("board");
+  if (!board) { list.innerHTML = "<li>Leaderboards need a connection.</li>"; return; }
+  list.innerHTML = "<li>Loading…</li>";
+  board.submit(tileCount(raftNow())).catch(() => null).then(() => board.top(10)).then(({ entries }) => {
+    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${e.score} tiles</span></li>`).join("") : "<li>No rafts yet. Yours is first.</li>";
+  }).catch(() => { list.innerHTML = "<li>Couldn't load the leaderboard.</li>"; });
+}
+$("aboard").onclick = aboard;
+
+// ── INPUT ───────────────────────────────────────────────────────────────────────────
+const keys = new Set(), mouse = { x: 0, y: 0, seen: false };
+const MOVE = { w: [0, -1], arrowup: [0, -1], s: [0, 1], arrowdown: [0, 1], a: [-1, 0], arrowleft: [-1, 0], d: [1, 0], arrowright: [1, 0] };
+addEventListener("keydown", (e) => {
+  const k = e.key.toLowerCase();
+  if (MOVE[k] || k === " ") e.preventDefault();
+  keys.add(k);
+  if (k === "b" && !e.repeat) setBuilding(!me.building);
+  if (k === "escape") setBuilding(false);
+});
+addEventListener("keyup", (e) => keys.delete(e.key.toLowerCase()));
+addEventListener("blur", () => keys.clear());
+for (const ev of ["pointerdown", "keydown"]) addEventListener(ev, () => { try { audio ||= new AudioContext(); } catch {} }, { once: true });
+const cv = renderer.domElement;
+cv.addEventListener("contextmenu", (e) => e.preventDefault());
+const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), seaPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0), hit = new THREE.Vector3();
+/** A screen point -> the spot on the sea it points at, through the camera that drew the frame. */
+function seaPoint(cx, cy) { ndc.set(cx / innerWidth * 2 - 1, -(cy / innerHeight) * 2 + 1); ray.setFromCamera(ndc, camera); return ray.ray.intersectPlane(seaPlane, hit) ? { x: hit.x, z: hit.z } : null; }
+/** Click or tap on the world: build on a green spot in build mode, else throw the hook there. */
+function act(cx, cy) {
+  const p = seaPoint(cx, cy); if (!p) return;
+  if (me.building) { const i = spotAt(p.x, p.z); if (!tryBuild(i)) toast("Tap a green spot next to the raft"); return; }
+  throwAt(p.x, p.z);
+}
+// Touch: the left side of the screen is a thumb stick; a tap anywhere else throws (or builds).
+const stick = { id: null, x0: 0, y0: 0, dx: 0, dy: 0 };
+cv.addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  if (e.pointerType === "mouse") { if (e.button === 0) act(e.clientX, e.clientY); else if (e.button === 2) setBuilding(false); return; }
+  if (e.clientX < innerWidth * 0.4 && stick.id === null) { Object.assign(stick, { id: e.pointerId, x0: e.clientX, y0: e.clientY, dx: 0, dy: 0 }); Object.assign($("stick").style, { left: e.clientX + "px", top: e.clientY + "px" }); $("stick").hidden = false; }
+  else act(e.clientX, e.clientY);
+});
+cv.addEventListener("pointermove", (e) => {
+  if (e.pointerType === "mouse") { mouse.x = e.clientX; mouse.y = e.clientY; mouse.seen = true; return; }
+  if (e.pointerId !== stick.id) return;
+  let dx = e.clientX - stick.x0, dy = e.clientY - stick.y0; const d = Math.hypot(dx, dy);
+  if (d > 50) { dx *= 50 / d; dy *= 50 / d; }
+  stick.dx = dx; stick.dy = dy; $("stick").firstChild.style.transform = `translate(${dx}px, ${dy}px)`;
+});
+for (const ev of ["pointerup", "pointercancel"]) addEventListener(ev, (e) => { if (e.pointerId === stick.id) { stick.id = null; stick.dx = stick.dy = 0; $("stick").hidden = true; } });
+$("build").addEventListener("pointerdown", (e) => { e.preventDefault(); e.stopPropagation(); setBuilding(!me.building); });
+document.addEventListener("touchmove", (e) => e.preventDefault(), { passive: false });
+function readInput() {
+  input.mx = input.mz = 0;
+  for (const k of keys) if (MOVE[k]) { input.mx += MOVE[k][0]; input.mz += MOVE[k][1]; }
+  if (stick.id !== null) { input.mx = stick.dx / 50; input.mz = stick.dy / 50; }
+  me.buildSpot = -1;
+  const p = mouse.seen ? seaPoint(mouse.x, mouse.y) : null;
+  aimRing.visible = !!p && !me.building && !me.sw && !me.sunk;
+  if (p) {
+    if (me.building) me.buildSpot = spotAt(p.x, p.z);
+    else { const d = Math.hypot(p.x - me.x, p.z - me.z), k = d > CONFIG.hookRange ? CONFIG.hookRange / d : 1; aimRing.position.set(me.x + (p.x - me.x) * k, 0.1, me.z + (p.z - me.z) * k); }
+  }
+}
+
+// ── MAIN LOOP ───────────────────────────────────────────────────────────────────────
+let last = performance.now(), lastHb = 0, lastHud = 0;
+const focus = new THREE.Vector3(), camOff = new THREE.Vector3();
+function frame(now) {
+  const dt = Math.max(0, Math.min(0.05, (now - last) / 1000)); last = now;
+  const t = now / 1000;
+  if (now - lastHb > 1000) { lastHb = now; net.me.set("hb", Date.now()); fixColor(); }
+  if (isHost()) hostTick(dt, now); else host.acting = host.adopted = false;
+  if (!ATTRACT) readInput();
+  myTick(dt);
+  stepSea(t, dt); syncRaft(t, dt); syncDebris(dt, t); syncShark(dt, t); syncCrew(dt, t); syncGhosts(t);
+  stepBits(dt); stepPops(dt);
+  if (ATTRACT) { // the preview: a slow sway that keeps the whole crew in frame
+    const crew = team(), cx = crew.reduce((n, c) => n + c.x, 0) / crew.length, cz = crew.reduce((n, c) => n + c.z, 0) / crew.length, a = -0.3 + Math.sin(t * 0.25) * 0.35;
+    focus.lerp(P3.set(cx * 0.6, 0, cz * 0.6), 1 - Math.pow(0.3, dt));
+    camera.position.set(focus.x + Math.sin(a) * 11.5, 8.5, focus.z + Math.cos(a) * 11.5); camera.lookAt(focus.x, -0.6, focus.z - 0.5);
+  } else { // a 3/4 camera that follows me, a little ahead toward the raft's middle
+    const tall = innerHeight > innerWidth ? 1.45 : 1;
+    camOff.set(0, 15, 11).multiplyScalar(tall);
+    focus.lerp(P3.set(me.x * 0.7, 0, me.z * 0.7), 1 - Math.pow(0.003, dt));
+    camera.position.copy(focus).add(camOff); camera.lookAt(focus);
+  }
+  sun.position.set(focus.x + 18, 34, focus.z + 12); sun.target.position.copy(focus);
+  renderer.render(scene, camera);
+  if (now - lastHud > 120) { lastHud = now; hud(); }
+  requestAnimationFrame(frame);
+}
+
+(async function start() {
+  net = await connect();
+  net.onState((st) => { S = st; });
+  net.on("hook", (m, from) => { if (hosting() && m && typeof m.i === "number") applyHook(m.i, from); });
+  net.on("smack", () => { if (hosting()) applySmack(); });
+  net.on("build", (m) => { if (hosting() && m && Number.isInteger(m.x) && Number.isInteger(m.y) && m.x >= 0 && m.y >= 0 && m.x < N && m.y < N) applyBuild(m.y * N + m.x, true); });
+  net.on("chomp", (m) => { if (m && m.to === net.sessionId) applyChomp(); });
+  net.on("memory", (m) => { if (m && typeof m.text === "string") toast(m.text.slice(0, 80)); });
+  net.onDisconnect(() => { netDown = true; $("net").textContent = "Reconnecting…"; });
+  net.onReconnect(() => { netDown = false; });
+  if (!net.offline && typeof MP !== "undefined") { player = MP.auth({ key: MP_CONNECT.key, apiUrl: MP_CONNECT.apiUrl }); board = player.leaderboard(CONFIG.board); }
+  const taken = new Set([...Object.entries(S.entities.players || {}).filter(([id]) => id !== net.sessionId).map(([, p]) => p.c), ...readBots().map((b) => b.color)]);
+  Object.assign(me, aboardSpot());
+  me.id = net.sessionId; me.color = COLORS.find((c) => !taken.has(c)) || COLORS[Math.floor(Math.random() * COLORS.length)];
+  net.me.set({ n: myName, c: me.color, hb: Date.now() });
+  if (ATTRACT) {
+    Object.assign(CONFIG, { seats: 4, maxDebris: 20, debrisEvery: 0.35, debrisSpread: 16, sharkRestMs: [1500, 2500], sharkBiteMs: 900, drift: 2.4, botThrowMs: [700, 1500] });
+    CONFIG.startStash = { w: 60, r: 16 };
+    memory.ready = true;
+  } else loadMemory();
+  setInterval(memoryTick, 1000);
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

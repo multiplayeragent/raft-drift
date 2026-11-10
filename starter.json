@@ -1,0 +1,22 @@
+{
+  "name": "Raft Drift",
+  "genre": "sandbox",
+  "dim": "3D",
+  "mode": "Co-op",
+  "players": "1–6",
+  "hook": "Hook what floats by. Grow the raft. Mind the shark.",
+  "how": "Throw your hook at planks, barrels and crates drifting past to fill the crew's stash, then spend it on new raft tiles. A shark circles and bites the edge tiles: hook it a few times to chase it off, and stay out of the water.",
+  "controls": "WASD to walk, click the sea to throw your hook, B to build, or a thumb stick, tap to throw and the BUILD button",
+  "uses": [
+    ["World memory", "The raft is remembered by its crew: whoever comes back first brings back every tile and the crew's stash."],
+    ["Host-run rules", "The host's browser drifts the debris, runs the shark and checks every tile built; if it leaves, the next player takes over."],
+    ["Leaderboard", "The biggest raft, in tiles, each player has sailed on."],
+    ["Bots", "Bot sailors hook debris, build tiles and smack the shark until enough people join."],
+    ["Live sync", "Every sailor, hook, tile and shark bite shows up for everyone at once."]
+  ],
+  "ideas": [
+    "Add a fishing rod that catches fish to cook",
+    "Add a storm every few minutes with bigger waves",
+    "Let players build a sail that steers the raft"
+  ]
+}
