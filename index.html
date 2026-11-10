@@ -197,7 +197,9 @@ function livePlayers() {
   }
   return out.sort();
 }
-const isHost = () => livePlayers()[0] === net.sessionId;
+let frameAt = 0, wokeAt = -1e9; // my loop's last frame, and when it last woke from a stall (a frozen or background tab)
+/** Never while my own loop is stalled, nor for 0.7s after it wakes: the room moved on without me, so the newer state lands first. */
+const isHost = () => livePlayers()[0] === net.sessionId && performance.now() - frameAt < 1000 && performance.now() - wokeAt > 700;
 
 // ── WORLD MEMORY ────────────────────────────────────────────────────────────────────
 // A relay room forgets everything when its last player leaves, so the PLAYERS remember the raft:
@@ -1075,6 +1077,9 @@ let last = performance.now(), lastHb = 0, lastHud = 0;
 const focus = new THREE.Vector3(), camOff = new THREE.Vector3();
 function frame(now) {
   requestAnimationFrame(frame);
+  const t0 = performance.now(); // not `now`: the first frame after a freeze can be stamped from before it ended
+  if (frameAt && t0 - frameAt > 1000) { wokeAt = t0; host.acting = host.adopted = false; } // woke from a stall: drop my host copy, adopt state again (see isHost)
+  frameAt = t0;
   const dt = Math.max(0, Math.min(0.05, (now - last) / 1000)); last = now;
   const t = now / 1000;
   if (now - lastHb > 1000) { lastHb = now; net.me.set("hb", Date.now()); fixColor(); }
