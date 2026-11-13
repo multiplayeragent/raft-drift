@@ -34,6 +34,7 @@
   .card h2 { margin: 0; font-size: 26px; color: #ffe066; } .card h3 { margin: 14px 0 4px; font-size: 13px; color: #9fe6ff; text-align: left; }
   .card ol { margin: 0; padding-left: 24px; font-size: 14px; text-align: left; }
   .card li span { float: right; font-variant-numeric: tabular-nums; }
+  .card li.note { list-style: none; margin-left: -24px; opacity: .8; } /* a status line, not a numbered entry */
   .card p { margin: 8px 0 0; font-size: 14px; opacity: .85; }
   button.go { width: 100%; min-height: 48px; margin-top: 16px; border: 0; border-radius: 12px; background: #ffe066; color: #3a2a00; font: 800 17px system-ui, sans-serif; cursor: pointer; }
   @media (max-width: 640px) { #team { display: none; } #stash { font-size: 18px; } }
@@ -57,7 +58,7 @@
 <div class="stick" id="stick" hidden><i></i></div>
 <div id="sunk" hidden><div class="card">
   <h2>The shark got you!</h2><p id="sunkSub"></p>
-  <h3>Biggest rafts</h3><ol id="board"><li>Loading…</li></ol>
+  <h3>Biggest rafts</h3><ol id="board"><li class="note">Loading…</li></ol>
   <button class="go" id="aboard">Back aboard</button><p id="sunkNext"></p>
 </div></div>
 <script type="module">
@@ -127,6 +128,7 @@ const CONFIG = {
   seats: 4,              // bots fill the crew up to this many
   botThrowMs: [2500, 4500], // a bot waits this long between throws (they leave plenty for you)
   botReserve: 4,         // wood the bots leave for each person in the crew
+  botLeave: 2,           // bots leave alone the pieces nearest each person (and what a person's hook flies at)
   saveNs: "raft-drift",  // player-save namespace for world memory
   saveEvery: 10000,      // ms between world-memory saves
   board: "raft-size",    // leaderboard name
@@ -671,7 +673,7 @@ function stepDebris(dt) {
 /** The shark: circle, pick an edge tile, swim to it, bite until it breaks; hunt swimmers; flee when smacked enough. */
 function stepShark(dt) {
   const s = host.shark, t = Date.now(), g = host.raft, R = raftRadius(g) + 3.5;
-  const now = performance.now(), wet = team().filter((p) => p.sw && !p.bot);
+  const now = performance.now(), wet = team().filter((p) => p.sw); // bots that slip in get hunted too
   for (const id of host.wet.keys()) if (!wet.some((p) => p.id === id)) host.wet.delete(id);
   for (const p of wet) if (!host.wet.has(p.id)) host.wet.set(p.id, now);
   const swimmer = wet.find((p) => now - host.wet.get(p.id) > CONFIG.sharkGraceMs);
@@ -786,16 +788,27 @@ function landHook(c) {
 /** What a bot (or me in the preview) does next: smack the shark, build, or hook the nearest debris. */
 function botGoal(b) {
   const g = host.raft, s = host.shark, crew = host.crew, reserve = ATTRACT ? 0 : CONFIG.botReserve * livePlayers().length;
-  if ((s.st === "go" || s.st === "bite") && dist(s, b) < 14) return { kind: "shark" };
+  if ((s.st === "go" || s.st === "bite" || s.st === "hunt") && dist(s, b) < 14) return { kind: "shark" };
   if (crew.w - reserve >= CONFIG.cost.w && crew.r >= CONFIG.cost.r) {
     const spots = g.map((_, i) => i).filter((i) => canBuild(g, i)).map((i) => ({ i, score: neighbors(i).filter((n) => isTile(g[n])).length * 3 - Math.hypot(spotX(i), spotZ(i)) * 0.4 - Math.hypot(spotX(i) - b.x, spotZ(i) - b.z) * 0.2 + Math.random() }));
     spots.sort((p, q) => q.score - p.score);
     if (spots.length) return { kind: "build", i: spots[0].i };
   }
-  const taken = new Set([...host.bots.values(), me].filter((o) => o !== b && o.goal && o.goal.kind === "hook").map((o) => o.goal.id)); // spread out
+  const taken = leftForPeople(); // people get first pick of what floats near them
+  for (const o of [...host.bots.values(), me]) if (o !== b && o.goal && o.goal.kind === "hook") taken.add(o.goal.id); // spread out
   const free = debrisList().filter((d) => !d.by && d.x > -30 && !taken.has(d.id)).map((d) => ({ d, k: dist(d, b) + Math.random() * 3 })).sort((p, q) => p.k - q.k)[0];
   if (free) return { kind: "hook", id: free.d.id };
   b.post += 1.3; return { kind: "walk", x: Math.sin(b.post) * 1.5, z: Math.cos(b.post) * 1.5 };
+}
+/** Debris the bots leave alone: the CONFIG.botLeave free pieces nearest each person within reach, and any piece a person's hook is flying at. */
+function leftForPeople() {
+  const out = new Set(), free = debrisList().filter((d) => !d.by);
+  for (const p of team()) {
+    if (p.bot || ATTRACT) continue;
+    free.filter((d) => dist(d, p) < CONFIG.hookRange + 2).sort((x, y) => dist(x, p) - dist(y, p)).slice(0, CONFIG.botLeave).forEach((d) => out.add(d.id));
+    if (p.hx !== null && p.hx !== undefined) free.filter((d) => Math.hypot(d.x - p.hx, d.z - p.hz) < CONFIG.hookGrab + 1.5).forEach((d) => out.add(d.id));
+  }
+  return out;
 }
 /** One bot's brain (also drives me in ?attract): walk the planks to a good spot, then throw or build. */
 function stepBot(b, dt) {
@@ -893,7 +906,7 @@ function throwAt(x, z) {
 }
 function applyChomp() {
   if (me.sunk) return;
-  me.sunk = true; me.sunkAt = Date.now(); me.hk = null; sfx("chomp");
+  me.sunk = true; me.sunkAt = Date.now(); me.hk = null; me.hx = me.hz = null; sfx("chomp"); // no hook left hanging in the water
   burst(me.x, 0.3, me.z, "#e8f8ff", 20, 5);
   Object.assign(me, { ...aboardSpot(), sw: 0 }); // you wash back aboard once you close the card
   if (ATTRACT) { me.sunk = false; return; }
@@ -998,7 +1011,7 @@ function hud() {
   $("build").firstChild.textContent = me.building ? "DONE" : "BUILD";
   $("build").classList.toggle("poor", c.w < CONFIG.cost.w || c.r < CONFIG.cost.r);
   $("team").innerHTML = team().map((p) => `<div class="${p === me ? "mine" : ""}">${esc(p === me ? "You" : p.name)}${p.sw ? " 🌊" : ""} · ${c.hooked?.[p.id] || 0} hooked<i style="background:${esc(p.color)}"></i></div>`).join("");
-  const alert = s.st === "bite" ? "The shark is biting the raft! Hook it!" : s.st === "hunt" ? "Shark! Get out of the water!" : me.sw ? "You're swimming. Climb back onto the raft" : "";
+  const alert = s.st === "bite" ? "The shark is biting the raft! Hook it!" : s.st === "hunt" ? (me.sw ? "Shark! Get out of the water!" : "The shark is after a swimmer! Hook it!") : me.sw ? "You're swimming. Climb back onto the raft" : "";
   $("alert").textContent = alert; $("alert").classList.toggle("on", !!alert);
   const early = performance.now() - startedAt < 12000;
   $("hint").textContent = touchUI ? "Left thumb walks · tap the sea to throw your hook · tap BUILD to add tiles" : "WASD to walk · click the sea to throw your hook at debris (or the shark) · B to build";
@@ -1009,11 +1022,11 @@ function hud() {
 }
 function showBoard() {
   const list = $("board");
-  if (!board) { list.innerHTML = "<li>Leaderboards need a connection.</li>"; return; }
-  list.innerHTML = "<li>Loading…</li>";
+  if (!board) { list.innerHTML = `<li class="note">Leaderboards need a connection.</li>`; return; }
+  list.innerHTML = `<li class="note">Loading…</li>`;
   board.submit(tileCount(raftNow())).catch(() => null).then(() => board.top(10)).then(({ entries }) => {
-    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${e.score} tiles</span></li>`).join("") : "<li>No rafts yet. Yours is first.</li>";
-  }).catch(() => { list.innerHTML = "<li>Couldn't load the leaderboard.</li>"; });
+    list.innerHTML = entries.length ? entries.map((e) => `<li>${esc(e.username || "Player")}<span>${e.score} tiles</span></li>`).join("") : `<li class="note">No rafts yet. Yours is first.</li>`;
+  }).catch(() => { list.innerHTML = `<li class="note">Couldn't load the leaderboard.</li>`; });
 }
 $("aboard").onclick = aboard;
 
